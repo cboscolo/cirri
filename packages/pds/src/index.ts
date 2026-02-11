@@ -12,6 +12,13 @@
 // Public API exports
 export { AccountDurableObject } from "./account-do";
 export type { PDSEnv, DataLocation } from "./types";
+export {
+	registerUser,
+	getUserByFid,
+	getUserByNumber,
+	getUserCount,
+} from "./user-registry";
+export type { UserRegistration } from "./user-registry";
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -24,6 +31,7 @@ import * as sync from "./xrpc/sync";
 import * as repo from "./xrpc/repo";
 import * as server from "./xrpc/server";
 import * as fidAccount from "./xrpc/fid-account";
+import * as fidSettings from "./xrpc/fid-settings";
 import {
 	hostnameToFid,
 	fidToDid,
@@ -155,6 +163,10 @@ app.get("/.well-known/did.json", async (c) => {
 		);
 	}
 
+	// Check for custom PDS URL - if set, use it instead of the default
+	const customPdsUrl = await accountDO.rpcGetCustomPdsUrl();
+	const serviceEndpoint = customPdsUrl || `https://${handle}`;
+
 	const didDocument = {
 		"@context": [
 			"https://www.w3.org/ns/did/v1",
@@ -175,8 +187,7 @@ app.get("/.well-known/did.json", async (c) => {
 			{
 				id: "#atproto_pds",
 				type: "AtprotoPersonalDataServer",
-				// Use per-user subdomain as PDS endpoint (matches DID structure)
-				serviceEndpoint: `https://${handle}`,
+				serviceEndpoint,
 			},
 		],
 	};
@@ -267,6 +278,24 @@ app.post("/xrpc/is.fid.auth.login", (c) =>
 // Login with Sign In With Farcaster (browser-based)
 app.post("/xrpc/is.fid.auth.siwf", (c) =>
 	fidAccount.loginWithSiwf(c, getAccountDO),
+);
+
+// ============================================
+// FID Settings Endpoints
+// ============================================
+
+// Get PDS URL configuration
+app.get(
+	"/xrpc/is.fid.settings.getPdsUrl",
+	requireAuth,
+	(c: any) => fidSettings.getPdsUrl(c, getAccountDO(c.env, c.get("did"))),
+);
+
+// Set custom PDS URL
+app.post(
+	"/xrpc/is.fid.settings.setPdsUrl",
+	requireAuth,
+	(c: any) => fidSettings.setPdsUrl(c, getAccountDO(c.env, c.get("did"))),
 );
 
 // ============================================

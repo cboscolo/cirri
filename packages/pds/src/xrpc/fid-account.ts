@@ -15,6 +15,7 @@ import {
 import { createAccessToken, createRefreshToken } from "../session";
 import type { PDSEnv, AppEnv } from "../types";
 import type { AccountDurableObject } from "../account-do";
+import { registerUser } from "../user-registry";
 
 /** Function type for getting Account DO by DID */
 type GetAccountDO = (
@@ -129,6 +130,11 @@ export async function createAccount(
 			});
 		}
 		throw err;
+	}
+
+	// Register user in global registry (if D1 database is configured)
+	if (c.env.USER_REGISTRY) {
+		await registerUser(c.env.USER_REGISTRY, fid, signingKeyPublic);
 	}
 
 	// Create session tokens
@@ -310,6 +316,10 @@ export async function loginWithSiwf(
 	const existingAccount = await accountDO.rpcHasAtprotoIdentity();
 	let isNew = false;
 
+	// Extract custody address from SIWF verification result
+	const farcasterAddress =
+		"address" in verifyResult ? (verifyResult.address as string) : undefined;
+
 	if (!existingAccount) {
 		// Create new account
 		const keypair = await Secp256k1Keypair.create({ exportable: true });
@@ -325,6 +335,16 @@ export async function loginWithSiwf(
 			signingKey,
 			signingKeyPublic,
 		});
+
+		// Register user in global registry (if D1 database is configured)
+		if (c.env.USER_REGISTRY) {
+			await registerUser(
+				c.env.USER_REGISTRY,
+				fid,
+				signingKeyPublic,
+				farcasterAddress,
+			);
+		}
 
 		isNew = true;
 	}

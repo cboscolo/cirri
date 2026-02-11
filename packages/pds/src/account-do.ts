@@ -1596,6 +1596,18 @@ export class AccountDurableObject extends DurableObject<PDSEnv> {
 		return storage.getAtprotoDid();
 	}
 
+	/** Get the custom PDS URL for this account */
+	async rpcGetCustomPdsUrl(): Promise<string | null> {
+		const storage = await this.getStorage();
+		return storage.getCustomPdsUrl();
+	}
+
+	/** Set the custom PDS URL for this account */
+	async rpcSetCustomPdsUrl(url: string | null): Promise<void> {
+		const storage = await this.getStorage();
+		storage.setCustomPdsUrl(url);
+	}
+
 	/**
 	 * HTTP fetch handler for WebSocket upgrades.
 	 * This is used instead of RPC to avoid WebSocket serialization errors.

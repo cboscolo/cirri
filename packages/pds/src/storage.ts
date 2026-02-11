@@ -122,6 +122,16 @@ export class SqliteRepoStorage
 		} catch {
 			// Column already exists
 		}
+
+		// Migration: Add custom_pds_url column if it doesn't exist
+		// This allows users to point their DID document to a different PDS
+		try {
+			this.sql.exec(
+				"ALTER TABLE atproto_identity ADD COLUMN custom_pds_url TEXT DEFAULT NULL",
+			);
+		} catch {
+			// Column already exists, ignore
+		}
 	}
 
 	/**
@@ -793,5 +803,43 @@ export class SqliteRepoStorage
 			.toArray();
 		if (rows.length === 0) return null;
 		return rows[0]!.did as string;
+	}
+
+	/**
+	 * Get the custom PDS URL for this account.
+	 * When set, the DID document will point to this URL instead of the default fid.is subdomain.
+	 */
+	getCustomPdsUrl(): string | null {
+		const rows = this.sql
+			.exec("SELECT custom_pds_url FROM atproto_identity LIMIT 1")
+			.toArray();
+		if (rows.length === 0) return null;
+		return (rows[0]!.custom_pds_url as string) ?? null;
+	}
+
+	/**
+	 * Set the custom PDS URL for this account.
+	 * @param url - HTTPS URL of the custom PDS, or null to reset to default
+	 */
+	setCustomPdsUrl(url: string | null): void {
+		if (url !== null) {
+			// Validate URL format
+			try {
+				const parsed = new URL(url);
+				if (parsed.protocol !== "https:") {
+					throw new Error("Custom PDS URL must use HTTPS");
+				}
+			} catch (err) {
+				if (err instanceof Error && err.message.includes("HTTPS")) {
+					throw err;
+				}
+				throw new Error("Invalid URL format");
+			}
+		}
+
+		this.sql.exec(
+			"UPDATE atproto_identity SET custom_pds_url = ?, updated_at = datetime('now')",
+			url,
+		);
 	}
 }
