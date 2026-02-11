@@ -52,7 +52,7 @@
 		"@arethetypeswrong/cli": "^0.18.2",
 		"@atproto/api": "^0.18.9",
 		"@cloudflare/vite-plugin": "^1.17.0",
-		"@cloudflare/vitest-pool-workers": "https://pkg.pr.new/@cloudflare/vitest-pool-workers@79a1932669f44a24342c1ffd66c29decd8a8fee9",
+		"@cloudflare/vitest-pool-workers": "^0.12.11",
 		"@cloudflare/workers-types": "^4.20251225.0",
 		"@ipld/car": "^5.4.2",
 		"@types/qrcode": "^1.5.6",
@@ -62,7 +62,7 @@
 		"tsx": "^4.21.0",
 		"typescript": "^5.9.3",
 		"vite": "^6.4.1",
-		"vitest": "4.1.0-beta.1",
+		"vitest": "~3.2.4",
 		"wrangler": "^4.54.0",
 		"ws": "^8.18.3"
 	},

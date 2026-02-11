@@ -1,6 +1,11 @@
 import { defineWorkersConfig } from "@cloudflare/vitest-pool-workers/config";
 
 export default defineWorkersConfig({
+	resolve: {
+		alias: {
+			pino: "pino/browser.js",
+		},
+	},
 	test: {
 		globals: true,
 		deps: {
@@ -9,17 +14,15 @@ export default defineWorkersConfig({
 					enabled: true,
 					include: [
 						"multiformats",
-						"multiformats/hashes/digest",
-						"multiformats/hashes/sha2",
-						"multiformats/cid",
 						"@atproto/repo",
 						"@atproto/lex-cbor",
 						"@atproto/lex-data",
+						"@atproto/lex-json",
 						"@atproto/crypto",
 						"@atproto/common",
 						"@atproto/common-web",
-						"tslib",
-						"bcryptjs",
+						"@ipld/dag-cbor",
+						"uint8arrays",
 					],
 				},
 			},
@@ -40,8 +43,8 @@ export default defineWorkersConfig({
 						JWT_SECRET: "test-jwt-secret-at-least-32-chars-long",
 						PASSWORD_HASH:
 							"$2b$10$B6MKXNJ33Co3RoIVYAAvvO3jImuMiqL1T1YnFDN7E.hTZLtbB4SW6",
-						// Start accounts active by default in tests
 						INITIAL_ACTIVE: "true",
+						WEBFID_DOMAIN: "fid.test",
 					},
 				},
 				singleWorker: true,
