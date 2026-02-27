@@ -917,4 +917,12 @@ export class SqliteRepoStorage
 			url,
 		);
 	}
+
+	/** Update the stored handle for this account */
+	updateHandle(handle: string): void {
+		this.sql.exec(
+			"UPDATE atproto_identity SET handle = ?, updated_at = datetime('now')",
+			handle,
+		);
+	}
 }

@@ -519,3 +519,24 @@ button:disabled {
 	color: var(--success);
 	padding: 2px 0;
 }
+
+/* Handle Selection */
+.handle-options {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin-top: 8px;
+}
+
+.handle-option {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	cursor: pointer;
+	font-size: 14px;
+	font-family: monospace;
+}
+
+.handle-option input[type="radio"] {
+	accent-color: var(--accent, #6366f1);
+}

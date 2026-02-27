@@ -56,8 +56,8 @@ export function getTestAccountStub(): DurableObjectStub<AccountDurableObject> {
 export async function seedIdentity(
 	instance: AccountDurableObject,
 ): Promise<void> {
-	const hasIdentity = await instance.rpcHasAtprotoIdentity();
-	if (!hasIdentity) {
+	const identity = await instance.rpcGetAtprotoIdentity();
+	if (!identity) {
 		await instance.rpcSetAtprotoIdentity({
 			did: TEST_DID,
 			handle: TEST_HANDLE,

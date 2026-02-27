@@ -8,7 +8,7 @@ import {
 } from "../session";
 import { createServiceJwt } from "../service-auth";
 import { Secp256k1Keypair } from "@atproto/crypto";
-import { didToFid, fidToHandle, hostnameToFid, fidToDid } from "../farcaster-auth";
+import { hostnameToFid, fidToDid } from "../farcaster-auth";
 import type { PDSEnv, AppEnv, AuthedAppEnv } from "../types";
 import type { AccountDurableObject } from "../account-do";
 
@@ -90,8 +90,8 @@ export async function refreshSession(
 
 		const did = sub;
 		const accountDO = getAccountDO(c.env, did);
-		const exists = await accountDO.rpcHasAtprotoIdentity();
-		if (!exists) {
+		const identity = await accountDO.rpcGetAtprotoIdentity();
+		if (!identity) {
 			return c.json(
 				{
 					error: "AccountNotFound",
@@ -101,9 +101,7 @@ export async function refreshSession(
 			);
 		}
 
-		// Derive handle from DID
-		const fid = didToFid(did, domain);
-		const handle = fid ? fidToHandle(fid, domain) : did.replace("did:web:", "");
+		const handle = identity.handle;
 
 		const accessJwt = await createAccessToken(
 			c.env.JWT_SECRET,
@@ -233,8 +231,8 @@ export async function getSession(
 	}
 
 	const accountDO = getAccountDO(c.env, did);
-	const exists = await accountDO.rpcHasAtprotoIdentity();
-	if (!exists) {
+	const identity = await accountDO.rpcGetAtprotoIdentity();
+	if (!identity) {
 		return c.json(
 			{
 				error: "AccountNotFound",
@@ -244,9 +242,7 @@ export async function getSession(
 		);
 	}
 
-	// Derive handle from DID
-	const fid = didToFid(did, domain);
-	const handle = fid ? fidToHandle(fid, domain) : did.replace("did:web:", "");
+	const handle = identity.handle;
 
 	const { email: storedEmail } = await accountDO.rpcGetEmail();
 	const email = storedEmail || c.env.EMAIL;

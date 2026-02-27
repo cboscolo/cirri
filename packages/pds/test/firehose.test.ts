@@ -438,7 +438,7 @@ describe("Firehose (subscribeRepos)", () => {
 
 				// Verify account identity still exists but repo is deleted
 				expect(await instance.rpcAccountExists()).toBe(true);
-				expect(await instance.rpcHasAtprotoIdentity()).toBe(true);
+				expect(await instance.rpcGetAtprotoIdentity()).not.toBeNull();
 				expect(await instance.rpcGetAccountStatus()).toBe("deleted");
 
 				// Call handleFirehoseUpgrade directly
@@ -529,7 +529,7 @@ describe("Firehose (subscribeRepos)", () => {
 				await instance.rpcDeleteRepo();
 
 				// Identity row preserved (for DID tombstone)
-				expect(await instance.rpcHasAtprotoIdentity()).toBe(true);
+				expect(await instance.rpcGetAtprotoIdentity()).not.toBeNull();
 				// Public key cleared
 				const pubKey = await instance.rpcGetAtprotoPublicKey();
 				expect(pubKey).toBe("");

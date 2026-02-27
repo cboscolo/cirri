@@ -179,3 +179,82 @@ export async function setPdsUrl(
 		isCustom: pdsUrl !== null,
 	});
 }
+/**
+ * Get the handle for the authenticated user.
+ *
+ * GET /xrpc/is.fid.settings.getHandle
+ * Auth: Required (Bearer token)
+ */
+export async function getHandle(
+	c: Context<AppEnv>,
+	accountDO: DurableObjectStub<AccountDurableObject>,
+): Promise<Response> {
+	const identity = await accountDO.rpcGetAtprotoIdentity();
+	if (!identity) {
+		return c.json(
+			{ error: "AccountNotFound", message: "Account not found" },
+			404,
+		);
+	}
+
+	return c.json({ handle: identity.handle });
+}
+
+/**
+ * Set or reset the handle for the authenticated user.
+ *
+ * POST /xrpc/is.fid.settings.setHandle
+ * Auth: Required (Bearer token)
+ * Input: { handle: string | null }
+ *
+ * Any handle string is accepted — AT Protocol clients verify handles
+ * via forward lookup (/.well-known/atproto-did). Callers (e.g. miniapp)
+ * should validate before calling this endpoint.
+ *
+ * When handle is null: resets to default NNN.fid.is handle
+ */
+export async function setHandle(
+	c: Context<AppEnv>,
+	accountDO: DurableObjectStub<AccountDurableObject>,
+): Promise<Response> {
+	const body = await c.req
+		.json<{ handle: string | null }>()
+		.catch(() => null);
+
+	if (body === null || !("handle" in body)) {
+		return c.json(
+			{
+				error: "InvalidRequest",
+				message: "Request body must contain handle field",
+			},
+			400,
+		);
+	}
+
+	const newHandle = body.handle ?? "";
+
+	try {
+		await accountDO.rpcUpdateHandle(newHandle);
+	} catch (err) {
+		return c.json(
+			{
+				error: "InternalError",
+				message:
+					err instanceof Error ? err.message : "Failed to update handle",
+			},
+			500,
+		);
+	}
+
+	// Emit identity event so relays refresh their DID document cache
+	try {
+		await accountDO.rpcEmitIdentityEvent(newHandle);
+	} catch {
+		// Best-effort
+	}
+
+	return c.json({
+		success: true,
+		handle: newHandle,
+	});
+}

@@ -1,0 +1,8 @@
+{
+	"name": "fname-to-handle",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-12-02",
+	"routes": [
+		{ "pattern": "*.farcaster.social/*", "zone_name": "farcaster.social" }
+	]
+}

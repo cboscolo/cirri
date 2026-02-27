@@ -43,7 +43,7 @@ export async function createAccount(
 	c: Context<AppEnv>,
 	getAccountDO: GetAccountDO,
 ): Promise<Response> {
-	const body = await c.req.json<{ farcasterToken: string }>().catch(() => null);
+	const body = await c.req.json<{ farcasterToken: string; handle?: string }>().catch(() => null);
 
 	if (!body?.farcasterToken) {
 		return c.json(
@@ -87,10 +87,9 @@ export async function createAccount(
 		);
 	}
 
-	// Derive DID and handle from FID (deterministic)
-	// WEBFID_DOMAIN is the PDS domain used for DID/handle generation
+	// Derive DID from FID; use provided handle or default to NNN.fid.is
 	const did = fidToDid(fid, c.env.WEBFID_DOMAIN);
-	const handle = fidToHandle(fid, c.env.WEBFID_DOMAIN);
+	const handle = body.handle || fidToHandle(fid, c.env.WEBFID_DOMAIN);
 
 	// Get the account's Durable Object (route by DID)
 	const accountDO = getAccountDO(c.env, did);
@@ -104,12 +103,13 @@ export async function createAccount(
 		if (repoStatus.status === "deactivated") {
 			await accountDO.rpcActivateAccount();
 		}
+		const identity = await accountDO.rpcGetAtprotoIdentity();
 		const accessJwt = await createAccessToken(c.env.JWT_SECRET, did, did);
 		const refreshJwt = await createRefreshToken(c.env.JWT_SECRET, did, did);
 		return c.json({
 			accessJwt,
 			refreshJwt,
-			handle,
+			handle: identity?.handle ?? "",
 			did,
 			active: repoStatus.status !== "deleted",
 		});
@@ -236,16 +236,14 @@ export async function loginWithFarcaster(
 		);
 	}
 
-	// Derive DID and handle from FID (deterministic)
 	const did = fidToDid(fid, c.env.WEBFID_DOMAIN);
-	const handle = fidToHandle(fid, c.env.WEBFID_DOMAIN);
 
 	// Get the account's Durable Object (route by DID)
 	const accountDO = getAccountDO(c.env, did);
 
 	// Check account exists
-	const exists = await accountDO.rpcAccountExists();
-	if (!exists) {
+	const identity = await accountDO.rpcGetAtprotoIdentity();
+	if (!identity) {
 		return c.json(
 			{
 				error: "AccountNotFound",
@@ -261,7 +259,7 @@ export async function loginWithFarcaster(
 	return c.json({
 		accessJwt,
 		refreshJwt,
-		handle,
+		handle: identity.handle,
 		did,
 		active: true,
 	});
@@ -325,6 +323,7 @@ function parseSiwfBody(c: Context<AppEnv>) {
 			signature: `0x${string}`;
 			fid: string;
 			nonce: string;
+			handle?: string;
 		}>()
 		.catch(() => null);
 }
@@ -398,11 +397,10 @@ export async function loginWithSiwf(
 	}
 
 	const did = fidToDid(fid, domain);
-	const handle = fidToHandle(fid, domain);
 	const accountDO = getAccountDO(c.env, did);
 
-	const exists = await accountDO.rpcAccountExists();
-	if (!exists) {
+	const identity = await accountDO.rpcGetAtprotoIdentity();
+	if (!identity) {
 		return c.json(
 			{
 				error: "AccountNotFound",
@@ -418,7 +416,7 @@ export async function loginWithSiwf(
 	return c.json({
 		accessJwt,
 		refreshJwt,
-		handle,
+		handle: identity.handle,
 		did,
 		active: true,
 	});
@@ -455,7 +453,7 @@ export async function createAccountSiwf(
 	}
 
 	const did = fidToDid(fid, domain);
-	const handle = fidToHandle(fid, domain);
+	const handle = body!.handle || fidToHandle(fid, domain);
 	const accountDO = getAccountDO(c.env, did);
 
 	// Check if account already exists — handle idempotent creation
@@ -467,12 +465,13 @@ export async function createAccountSiwf(
 		if (repoStatus.status === "deactivated") {
 			await accountDO.rpcActivateAccount();
 		}
+		const identity = await accountDO.rpcGetAtprotoIdentity();
 		const accessJwt = await createAccessToken(c.env.JWT_SECRET, did, did);
 		const refreshJwt = await createRefreshToken(c.env.JWT_SECRET, did, did);
 		return c.json({
 			accessJwt,
 			refreshJwt,
-			handle,
+			handle: identity?.handle ?? "",
 			did,
 			active: repoStatus.status !== "deleted",
 		});
@@ -497,12 +496,13 @@ export async function createAccountSiwf(
 		// Race condition: identity was created between our check and set
 		if (err instanceof Error && err.message.includes("already exists")) {
 			await accountDO.rpcActivateAccount();
+			const identity = await accountDO.rpcGetAtprotoIdentity();
 			const accessJwt = await createAccessToken(c.env.JWT_SECRET, did, did);
 			const refreshJwt = await createRefreshToken(c.env.JWT_SECRET, did, did);
 			return c.json({
 				accessJwt,
 				refreshJwt,
-				handle,
+				handle: identity?.handle ?? "",
 				did,
 				active: true,
 			});

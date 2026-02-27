@@ -46,11 +46,12 @@ export interface PasskeyAssertion {
 export async function createAccount(
 	fid: string,
 	farcasterToken: string,
+	handle?: string,
 ): Promise<SessionResponse> {
 	const response = await fetch(`${pdsUrl(fid)}/xrpc/is.fid.account.create`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ farcasterToken }),
+		body: JSON.stringify({ farcasterToken, ...(handle ? { handle } : {}) }),
 	});
 
 	const data = await response.json();
@@ -367,13 +368,14 @@ export async function loginWithSiwf(
 export async function createAccountSiwf(
 	fid: string,
 	credentials: SiwfCredentials,
+	handle?: string,
 ): Promise<SessionResponse> {
 	const response = await fetch(
 		`${pdsUrl(fid)}/xrpc/is.fid.account.createSiwf`,
 		{
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify(credentials),
+			body: JSON.stringify({ ...credentials, ...(handle ? { handle } : {}) }),
 		},
 	);
 
@@ -584,9 +586,9 @@ export async function syncRelaySeq(
  * Emit an #account event to the firehose.
  * Debug tool — prods relays to update their cached account status.
  */
-export async function emitAccountEvent(accessToken: string, handle: string): Promise<void> {
+export async function emitAccountEvent(accessToken: string, pdsBase: string): Promise<void> {
 	const response = await fetch(
-		`https://pds-${handle}/xrpc/gg.mk.experimental.emitAccountEvent`,
+		`${pdsBase}/xrpc/gg.mk.experimental.emitAccountEvent`,
 		{
 			method: "POST",
 			headers: {
@@ -684,7 +686,7 @@ export interface DebugInfo {
 export async function fetchDebugInfo(
 	accessToken: string,
 	did: string,
-	handle: string,
+	pdsBase: string,
 ): Promise<DebugInfo> {
 	const empty = (): DebugInfo => ({
 		didDocument: { error: "not fetched" },
@@ -701,7 +703,6 @@ export async function fetchDebugInfo(
 	const result = empty();
 
 	// Per-account endpoints need the PDS subdomain (e.g. https://pds-12345.fid.is)
-	const pdsBase = `https://pds-${handle}`;
 
 	const fetchJson = async (url: string, auth?: string) => {
 		const headers: Record<string, string> = {};
@@ -793,9 +794,9 @@ export async function deactivateAccount(accessToken: string, pdsBase: string): P
 /**
  * Emit an identity event to notify relays/AppView to refresh DID document cache.
  */
-export async function emitIdentityEvent(accessToken: string, handle: string): Promise<void> {
+export async function emitIdentityEvent(accessToken: string, pdsBase: string): Promise<void> {
 	const response = await fetch(
-		`https://pds-${handle}/xrpc/gg.mk.experimental.emitIdentityEvent`,
+		`${pdsBase}/xrpc/gg.mk.experimental.emitIdentityEvent`,
 		{
 			method: "POST",
 			headers: {
@@ -840,6 +841,83 @@ export async function deleteAccount(accessToken: string, pdsBase: string): Promi
 // ============================================
 // Settings API
 // ============================================
+
+// ============================================
+// Handle API
+// ============================================
+
+/**
+ * Verify that an FNAME is owned by the expected FID via the Farcaster FNAME registry.
+ * Call this client-side before setting a handle to give the user immediate feedback.
+ */
+export async function verifyFnameOwnership(fname: string, expectedFid: string): Promise<boolean> {
+	try {
+		const res = await fetch(
+			`https://fnames.farcaster.xyz/transfers/current?name=${encodeURIComponent(fname)}`,
+			{ signal: AbortSignal.timeout(5000) },
+		);
+		if (!res.ok) return false;
+		const data = (await res.json()) as { transfer?: { to: number } };
+		return data.transfer?.to?.toString() === expectedFid;
+	} catch {
+		return false;
+	}
+}
+
+export interface HandleConfig {
+	handle: string;
+}
+
+/**
+ * Get the current handle.
+ */
+export async function getHandle(accessToken: string, pdsBase: string): Promise<HandleConfig> {
+	const response = await fetch(`${pdsBase}/xrpc/is.fid.settings.getHandle`, {
+		method: "GET",
+		headers: {
+			Authorization: `Bearer ${accessToken}`,
+		},
+	});
+
+	const data = await response.json();
+
+	if (!response.ok) {
+		throw new Error(
+			(data as ErrorResponse).message || "Failed to get handle",
+		);
+	}
+
+	return data as HandleConfig;
+}
+
+/**
+ * Set the handle or reset to default.
+ * @param handle - Handle string (e.g. "alice.farcaster.social") or null to reset to FID default
+ */
+export async function setHandle(
+	accessToken: string,
+	pdsBase: string,
+	handle: string | null,
+): Promise<{ success: boolean; handle: string }> {
+	const response = await fetch(`${pdsBase}/xrpc/is.fid.settings.setHandle`, {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			Authorization: `Bearer ${accessToken}`,
+		},
+		body: JSON.stringify({ handle }),
+	});
+
+	const data = await response.json();
+
+	if (!response.ok) {
+		throw new Error(
+			(data as ErrorResponse).message || "Failed to set handle",
+		);
+	}
+
+	return data as { success: boolean; handle: string };
+}
 
 export interface PdsUrlConfig {
 	pdsUrl: string;

@@ -17,6 +17,9 @@ import {
 	deleteAccount,
 	getPdsUrl,
 	setPdsUrl,
+	getHandle,
+	setHandle,
+	verifyFnameOwnership,
 	requestCrawl,
 	fetchDebugInfo,
 	activateAccount,
@@ -30,6 +33,7 @@ import {
 	type SiwfCredentials,
 	type FarcasterProfile,
 	type PdsUrlConfig,
+	type HandleConfig,
 	type DebugInfo,
 	type DebugField,
 } from "./api";
@@ -41,7 +45,8 @@ type AppState =
 	| { status: "authenticating" }
 	| {
 			status: "confirm-create";
-			createAccount: () => Promise<void>;
+			fid: string;
+			createAccount: (handle?: string) => Promise<void>;
 			profile: FarcasterProfile;
 	  }
 	| { status: "authenticated"; session: SessionResponse; isNew: boolean };
@@ -188,6 +193,125 @@ function SettingsSection({ accessToken, pdsBase }: { accessToken: string; pdsBas
 	);
 }
 
+// Handle settings component
+function HandleSection({
+	accessToken,
+	pdsBase,
+	did,
+	onHandleChanged,
+}: {
+	accessToken: string;
+	pdsBase: string;
+	did: string;
+	onHandleChanged: (newHandle: string) => void;
+}) {
+	const [handleConfig, setHandleConfig] = useState<HandleConfig | null>(null);
+	const [fname, setFname] = useState<string | undefined>(undefined);
+	const [loading, setLoading] = useState(true);
+	const [saving, setSaving] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const [success, setSuccess] = useState(false);
+
+	// Extract FID from DID (did:web:NNN.fid.is → NNN)
+	const fid = did.replace("did:web:", "").split(".")[0]!;
+
+	const fnameHandle = fname ? `${fname}.farcaster.social` : null;
+
+	useEffect(() => {
+		Promise.all([
+			getHandle(accessToken, pdsBase),
+			fetchFarcasterProfile(fid).then((p) => p.fname),
+		])
+			.then(([config, fetchedFname]) => {
+				setHandleConfig(config);
+				setFname(fetchedFname);
+				setLoading(false);
+			})
+			.catch((err) => {
+				setError(err.message);
+				setLoading(false);
+			});
+	}, [accessToken, pdsBase, fid]);
+
+	if (loading) {
+		return (
+			<div className="settings-section">
+				<div className="settings-header">Handle</div>
+				<div style={{ color: "var(--muted)", fontSize: 14 }}>Loading...</div>
+			</div>
+		);
+	}
+
+	if (!handleConfig) {
+		return null;
+	}
+
+	const currentHandle = handleConfig.handle;
+	const domain = import.meta.env.VITE_PDS_DOMAIN || "fid.is";
+	const defaultHandle = `${fid}.${domain}`;
+	const canSwitchToFname = fnameHandle !== null && currentHandle !== fnameHandle;
+	const canSwitchToDefault = currentHandle !== defaultHandle;
+
+	const switchHandle = async (newHandle: string | null) => {
+		setError(null);
+		setSuccess(false);
+		setSaving(true);
+
+		try {
+			// Validate FNAME ownership client-side before setting
+			if (newHandle && fname) {
+				const verified = await verifyFnameOwnership(fname, fid);
+				if (!verified) {
+					setError("Could not verify FNAME ownership");
+					setSaving(false);
+					return;
+				}
+			}
+
+			const result = await setHandle(accessToken, pdsBase, newHandle);
+			setHandleConfig({ handle: result.handle });
+			onHandleChanged(result.handle);
+			setSuccess(true);
+			setTimeout(() => setSuccess(false), 3000);
+		} catch (err) {
+			setError(err instanceof Error ? err.message : "Failed to update handle");
+		} finally {
+			setSaving(false);
+		}
+	};
+
+	return (
+		<div className="settings-section">
+			<div className="settings-header">Handle</div>
+			<div className="current-pds">
+				<span className="label">Current:</span>
+				<span className="value">@{currentHandle}</span>
+			</div>
+			{error && <div className="settings-error">{error}</div>}
+			{success && <div className="settings-success">Handle updated!</div>}
+			{canSwitchToFname && (
+				<button
+					onClick={() => switchHandle(fnameHandle)}
+					disabled={saving}
+					className="save-button"
+				>
+					{saving ? "Switching..." : `Switch to @${fnameHandle}`}
+				</button>
+			)}
+			{canSwitchToDefault && (
+				<button
+					onClick={() => switchHandle(null)}
+					disabled={saving}
+					className="save-button"
+					style={canSwitchToFname ? { marginTop: 8 } : undefined}
+				>
+					{saving ? "Switching..." : `Switch to @${defaultHandle}`}
+				</button>
+			)}
+		</div>
+	);
+}
+
 // Delete Account component
 function DeleteAccountSection({
 	accessToken,
@@ -320,12 +444,168 @@ function fidFromToken(token: string): string | null {
 	}
 }
 
+// Confirm-create screen with handle selection
+function ConfirmCreateScreen({
+	fid,
+	profile,
+	onCreateAccount,
+}: {
+	fid: string;
+	profile: FarcasterProfile;
+	onCreateAccount: (handle?: string) => Promise<void>;
+}) {
+	const fnameHandle = profile.fname
+		? `${profile.fname}.farcaster.social`
+		: null;
+	const hasEnsName =
+		profile.username &&
+		profile.username !== profile.fname &&
+		profile.username.includes(".");
+
+	// Default to FNAME handle if available
+	const [selectedHandle, setSelectedHandle] = useState<string | undefined>(
+		fnameHandle ?? undefined,
+	);
+	const [fnameVerified, setFnameVerified] = useState<boolean | null>(null);
+	const [verifying, setVerifying] = useState(false);
+
+	// Verify FNAME ownership when FNAME handle is selected
+	useEffect(() => {
+		if (!selectedHandle || !profile.fname) {
+			setFnameVerified(null);
+			return;
+		}
+		setVerifying(true);
+		verifyFnameOwnership(profile.fname, fid)
+			.then((ok) => {
+				setFnameVerified(ok);
+				setVerifying(false);
+			})
+			.catch(() => {
+				setFnameVerified(false);
+				setVerifying(false);
+			});
+	}, [selectedHandle, profile.fname, fid]);
+
+	const canCreate = !selectedHandle || (fnameVerified === true && !verifying);
+
+	return (
+		<div className="container">
+			<div className="card">
+				<h1 className="title">Create Account</h1>
+				<p className="subtitle">
+					No AT Protocol account found for your Farcaster identity.
+				</p>
+
+				{(profile.pfpUrl || profile.displayName || profile.fname || profile.bio) && (
+					<div className="preview-profile">
+						{profile.pfpUrl && (
+							<img
+								className="preview-avatar"
+								src={profile.pfpUrl}
+								alt=""
+							/>
+						)}
+						<div className="preview-profile-text">
+							{profile.displayName && (
+								<div className="preview-display-name">
+									{profile.displayName}
+								</div>
+							)}
+							{profile.fname && (
+								<div className="preview-fname">
+									@{profile.fname} on Farcaster
+								</div>
+							)}
+							{profile.bio && (
+								<div className="preview-bio">{profile.bio}</div>
+							)}
+						</div>
+					</div>
+				)}
+
+				{fnameHandle ? (
+					<div className="info">
+						<div className="info-label">Choose your AT Protocol Handle</div>
+						<div className="handle-options">
+							<label className="handle-option">
+								<input
+									type="radio"
+									name="handle"
+									checked={selectedHandle === fnameHandle}
+									onChange={() => setSelectedHandle(fnameHandle)}
+								/>
+								<span>@{fnameHandle}</span>
+								{selectedHandle === fnameHandle && verifying && (
+									<span style={{ color: "var(--muted)", fontSize: 12 }}>
+										(verifying...)
+									</span>
+								)}
+								{selectedHandle === fnameHandle && fnameVerified === false && !verifying && (
+									<span style={{ color: "var(--error)", fontSize: 12 }}>
+										(could not verify ownership)
+									</span>
+								)}
+							</label>
+							<label className="handle-option">
+								<input
+									type="radio"
+									name="handle"
+									checked={selectedHandle === undefined}
+									onChange={() => setSelectedHandle(undefined)}
+								/>
+								<span>Use default FID handle</span>
+							</label>
+						</div>
+					</div>
+				) : null}
+
+				{hasEnsName && (
+					<div className="preview-warning">
+						Your Farcaster username is{" "}
+						<strong>{profile.username}</strong>, but AT Protocol
+						handles must be valid DNS names. Your fname{" "}
+						<strong>{profile.fname}</strong> will be used instead.
+					</div>
+				)}
+
+				<p
+					style={{
+						marginBottom: 24,
+						color: "var(--muted)",
+						fontSize: 14,
+					}}
+				>
+					Would you like to create a new AT Protocol account linked to your
+					Farcaster identity?
+				</p>
+
+				<button
+					onClick={() => onCreateAccount(selectedHandle)}
+					disabled={!canCreate}
+				>
+					Create Account
+				</button>
+			</div>
+		</div>
+	);
+}
+
 /**
- * Derive the PDS base URL from a session handle.
- * Handle is `NNN.fid.is`, PDS base is `https://pds-NNN.fid.is`.
+ * Derive the PDS hostname from a session DID.
+ * DID is `did:web:NNN.fid.is` → `pds-NNN.fid.is`
  */
-function pdsBaseFromHandle(handle: string): string {
-	return `https://pds-${handle}`;
+function pdsHostnameFromDid(did: string): string {
+	const host = did.replace("did:web:", "");
+	return `pds-${host}`;
+}
+
+/**
+ * Derive the PDS base URL from a session DID.
+ * DID is `did:web:NNN.fid.is`, PDS base is `https://pds-NNN.fid.is`.
+ */
+function pdsBaseFromDid(did: string): string {
+	return `https://${pdsHostnameFromDid(did)}`;
 }
 
 // Debug page component
@@ -349,8 +629,8 @@ function DebugPage({
 		setLoading(true);
 		try {
 			const [info, rSeq] = await Promise.all([
-				fetchDebugInfo(session.accessJwt, session.did, session.handle),
-				getRelaySeq(`pds-${session.handle}`),
+				fetchDebugInfo(session.accessJwt, session.did, pdsBaseFromDid(session.did)),
+				getRelaySeq(pdsHostnameFromDid(session.did)),
 			]);
 			setDebugInfo(info);
 			setRelaySeq(rSeq);
@@ -359,7 +639,7 @@ function DebugPage({
 		} finally {
 			setLoading(false);
 		}
-	}, [session.accessJwt, session.did, session.handle]);
+	}, [session.accessJwt, session.did]);
 
 	useEffect(() => {
 		loadDebugInfo();
@@ -379,7 +659,7 @@ function DebugPage({
 		if (isNaN(seq)) return;
 		setActionStatus("Setting seq...");
 		try {
-			await syncRelaySeq(session.accessJwt, pdsBaseFromHandle(session.handle), seq);
+			await syncRelaySeq(session.accessJwt, pdsBaseFromDid(session.did), seq);
 			setActionStatus(`Seq set to ${seq}`);
 			await loadDebugInfo();
 		} catch (err) {
@@ -392,7 +672,7 @@ function DebugPage({
 	const handleActivate = async () => {
 		setActionStatus("Activating...");
 		try {
-			await activateAccount(session.accessJwt, pdsBaseFromHandle(session.handle));
+			await activateAccount(session.accessJwt, pdsBaseFromDid(session.did));
 			setActionStatus("Account activated");
 			await loadDebugInfo();
 		} catch (err) {
@@ -405,7 +685,7 @@ function DebugPage({
 	const handleDeactivate = async () => {
 		setActionStatus("Deactivating...");
 		try {
-			await deactivateAccount(session.accessJwt, pdsBaseFromHandle(session.handle));
+			await deactivateAccount(session.accessJwt, pdsBaseFromDid(session.did));
 			setActionStatus("Account deactivated");
 			await loadDebugInfo();
 		} catch (err) {
@@ -418,7 +698,7 @@ function DebugPage({
 	const handleMarkDeleted = async () => {
 		setActionStatus("Marking as deleted...");
 		try {
-			await setRepoStatus(session.accessJwt, pdsBaseFromHandle(session.handle), "deleted");
+			await setRepoStatus(session.accessJwt, pdsBaseFromDid(session.did), "deleted");
 			setActionStatus("Repo marked as deleted");
 			await loadDebugInfo();
 		} catch (err) {
@@ -431,7 +711,7 @@ function DebugPage({
 	const handleEmitIdentity = async () => {
 		setActionStatus("Emitting identity event...");
 		try {
-			await emitIdentityEvent(session.accessJwt, session.handle);
+			await emitIdentityEvent(session.accessJwt, pdsBaseFromDid(session.did));
 			setActionStatus("Identity event emitted");
 			await loadDebugInfo();
 		} catch (err) {
@@ -444,7 +724,7 @@ function DebugPage({
 	const handleEmitAccount = async () => {
 		setActionStatus("Emitting account event...");
 		try {
-			await emitAccountEvent(session.accessJwt, session.handle);
+			await emitAccountEvent(session.accessJwt, pdsBaseFromDid(session.did));
 			setActionStatus("Account event emitted");
 			await loadDebugInfo();
 		} catch (err) {
@@ -457,7 +737,7 @@ function DebugPage({
 	const handleRequestCrawl = async () => {
 		setActionStatus("Requesting crawl...");
 		try {
-			await requestCrawl(`pds-${session.handle}`);
+			await requestCrawl(pdsHostnameFromDid(session.did));
 			setActionStatus("Crawl requested");
 		} catch {
 			setActionStatus("Failed to request crawl");
@@ -663,9 +943,9 @@ function AppContent() {
 	/** After account creation, sync relay + populate profile */
 	const finalizeNewAccount = useCallback(
 		async (session: SessionResponse, profile: FarcasterProfile) => {
-			const pdsBase = pdsBaseFromHandle(session.handle);
+			const pdsBase = pdsBaseFromDid(session.did);
 			await populateProfile(session.accessJwt, pdsBase, session.did, profile);
-			requestCrawl(`pds-${session.handle}`);
+			requestCrawl(pdsHostnameFromDid(session.did));
 			setState({ status: "authenticated", session, isNew: true });
 		},
 		[],
@@ -695,10 +975,11 @@ function AppContent() {
 				// No account — prompt to create
 				setState({
 					status: "confirm-create",
+					fid,
 					profile,
-					createAccount: async () => {
+					createAccount: async (handle?: string) => {
 						setState({ status: "authenticating" });
-						const session = await createAccount(fid, token);
+						const session = await createAccount(fid, token, handle);
 						await finalizeNewAccount(session, profile);
 					},
 				});
@@ -745,10 +1026,11 @@ function AppContent() {
 					// No account — prompt to create
 					setState({
 						status: "confirm-create",
+						fid,
 						profile,
-						createAccount: async () => {
+						createAccount: async (handle?: string) => {
 							setState({ status: "authenticating" });
-							const session = await createAccountSiwf(fid, credentials);
+							const session = await createAccountSiwf(fid, credentials, handle);
 							await finalizeNewAccount(session, profile);
 						},
 					});
@@ -830,79 +1112,12 @@ function AppContent() {
 	}
 
 	if (state.status === "confirm-create") {
-		const { profile } = state;
-		const atHandle = profile.fname
-			? `${profile.fname}.farcaster.social`
-			: null;
-		const hasEnsName =
-			profile.username &&
-			profile.username !== profile.fname &&
-			profile.username.includes(".");
 		return (
-			<div className="container">
-				<div className="card">
-					<h1 className="title">Create Account</h1>
-					<p className="subtitle">
-						No AT Protocol account found for your Farcaster identity.
-					</p>
-
-					{(profile.pfpUrl || profile.displayName || profile.fname || profile.bio) && (
-						<div className="preview-profile">
-							{profile.pfpUrl && (
-								<img
-									className="preview-avatar"
-									src={profile.pfpUrl}
-									alt=""
-								/>
-							)}
-							<div className="preview-profile-text">
-								{profile.displayName && (
-									<div className="preview-display-name">
-										{profile.displayName}
-									</div>
-								)}
-								{profile.fname && (
-									<div className="preview-fname">
-										@{profile.fname} on Farcaster
-									</div>
-								)}
-								{profile.bio && (
-									<div className="preview-bio">{profile.bio}</div>
-								)}
-							</div>
-						</div>
-					)}
-
-					{atHandle && (
-						<div className="info">
-							<div className="info-label">Your AT Protocol Handle</div>
-							<div className="info-value">@{atHandle}</div>
-						</div>
-					)}
-
-					{hasEnsName && (
-						<div className="preview-warning">
-							Your Farcaster username is{" "}
-							<strong>{profile.username}</strong>, but AT Protocol
-							handles must be valid DNS names. Your fname{" "}
-							<strong>{profile.fname}</strong> will be used instead.
-						</div>
-					)}
-
-					<p
-						style={{
-							marginBottom: 24,
-							color: "var(--muted)",
-							fontSize: 14,
-						}}
-					>
-						Would you like to create a new AT Protocol account linked to your
-						Farcaster identity?
-					</p>
-
-					<button onClick={state.createAccount}>Create Account</button>
-				</div>
-			</div>
+			<ConfirmCreateScreen
+				fid={state.fid}
+				profile={state.profile}
+				onCreateAccount={state.createAccount}
+			/>
 		);
 	}
 
@@ -958,11 +1173,24 @@ function AppContent() {
 					</p>
 				)}
 
-				<SettingsSection accessToken={session.accessJwt} pdsBase={pdsBaseFromHandle(session.handle)} />
+				<HandleSection
+					accessToken={session.accessJwt}
+					pdsBase={pdsBaseFromDid(session.did)}
+					did={session.did}
+					onHandleChanged={(newHandle) => {
+						setState({
+							status: "authenticated",
+							session: { ...session, handle: newHandle },
+							isNew: false,
+						});
+					}}
+				/>
+
+				<SettingsSection accessToken={session.accessJwt} pdsBase={pdsBaseFromDid(session.did)} />
 
 				<DeleteAccountSection
 					accessToken={session.accessJwt}
-					pdsBase={pdsBaseFromHandle(session.handle)}
+					pdsBase={pdsBaseFromDid(session.did)}
 					handle={session.handle}
 					onDeleted={() => setState({ status: "browser-mode" })}
 				/>

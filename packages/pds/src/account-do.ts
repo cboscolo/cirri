@@ -1799,12 +1799,6 @@ export class AccountDurableObject extends DurableObject<PDSEnv> {
 	// AT Protocol Identity RPC Methods (Multi-tenant FID PDS)
 	// ============================================
 
-	/** Check if AT Protocol identity exists for this account */
-	async rpcHasAtprotoIdentity(): Promise<boolean> {
-		const storage = await this.getStorage();
-		return storage.hasAtprotoIdentity();
-	}
-
 	/** Get AT Protocol identity */
 	async rpcGetAtprotoIdentity(): Promise<{
 		did: string;
@@ -1863,6 +1857,12 @@ export class AccountDurableObject extends DurableObject<PDSEnv> {
 	async rpcSetCustomVerificationKey(key: string | null): Promise<void> {
 		const storage = await this.getStorage();
 		storage.setCustomVerificationKey(key);
+	}
+
+	/** Update the stored handle for this account */
+	async rpcUpdateHandle(handle: string): Promise<void> {
+		const storage = await this.getStorage();
+		storage.updateHandle(handle);
 	}
 
 	/**

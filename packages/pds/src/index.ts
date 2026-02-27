@@ -169,18 +169,20 @@ app.get("/.well-known/did.json", async (c) => {
 	}
 
 	const did = fidToDid(fid, domain);
-	const handle = fidToHandle(fid, domain);
 
-	// Fetch the public key from the account's DO (route by DID)
+	// Fetch the identity from the account's DO (route by DID)
 	const accountDO = getAccountDO(c.env, did);
-	const publicKey = await accountDO.rpcGetAtprotoPublicKey();
+	const identity = await accountDO.rpcGetAtprotoIdentity();
 
-	if (!publicKey) {
+	if (!identity) {
 		return c.json(
 			{ error: "AccountNotFound", message: "Account not found" },
 			404,
 		);
 	}
+
+	const handle = identity.handle;
+	const publicKey = identity.signingKeyPublic;
 
 	// Check for custom PDS URL and verification key
 	const [customPdsUrl, customVerificationKey] = await Promise.all([
@@ -366,6 +368,20 @@ app.post(
 	(c: any) => fidSettings.setPdsUrl(c, getAccountDO(c.env, c.get("did"))),
 );
 
+// Get handle configuration
+app.get(
+	"/xrpc/is.fid.settings.getHandle",
+	requireAuth,
+	(c: any) => fidSettings.getHandle(c, getAccountDO(c.env, c.get("did"))),
+);
+
+// Set handle
+app.post(
+	"/xrpc/is.fid.settings.setHandle",
+	requireAuth,
+	(c: any) => fidSettings.setHandle(c, getAccountDO(c.env, c.get("did"))),
+);
+
 // ============================================
 // Handle Resolution
 // ============================================
@@ -387,8 +403,8 @@ app.use("/xrpc/com.atproto.identity.resolveHandle", async (c, next) => {
 		// Handle matches subdomain pattern - derive DID and check if account exists
 		const did = fidToDid(fid, domain);
 		const accountDO = getAccountDO(c.env, did);
-		const hasCredentials = await accountDO.rpcHasAtprotoIdentity();
-		if (hasCredentials) {
+		const identity = await accountDO.rpcGetAtprotoIdentity();
+		if (identity) {
 			return c.json({ did });
 		}
 	}
