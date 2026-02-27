@@ -27,6 +27,12 @@ export async function requireAuth(
 	}>,
 	next: Next,
 ): Promise<Response | void> {
+	// Check if DPoP middleware already authenticated the user
+	const existingDid = c.get("did");
+	if (existingDid) {
+		return next();
+	}
+
 	const auth = c.req.header("Authorization");
 
 	if (!auth) {
@@ -39,7 +45,8 @@ export async function requireAuth(
 		);
 	}
 
-	// Only support Bearer tokens (session JWTs)
+	// DPoP tokens are handled by the DPoP middleware above;
+	// if we get here with a DPoP token, verification failed.
 	if (!auth.startsWith("Bearer ")) {
 		return c.json(
 			{

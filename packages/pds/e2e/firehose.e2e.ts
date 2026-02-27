@@ -1,173 +1,214 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { AtpAgent } from "@atproto/api";
 import WebSocket from "ws";
-import { createAgent, getPort, TEST_DID, uniqueRkey } from "./helpers";
+import {
+	getBaseUrl,
+	getPort,
+	TEST_DID,
+	TEST_DOMAIN,
+	TEST_HOST,
+	uniqueRkey,
+	createTestJwt,
+	seedTestAccount,
+	fetchWithHost,
+} from "./helpers";
 
-// TODO: Rewrite tests to use Farcaster Quick Auth (fid.is.auth.login)
-// Tests that require authentication are skipped until Farcaster Quick Auth e2e testing is implemented
-// NOTE: WebSocket tests fail in e2e environment due to "socket hang up" - wrangler dev may not support WS properly
-describe.skip("Firehose (subscribeRepos)", () => {
-	let agent: AtpAgent;
+describe("Firehose (subscribeRepos)", () => {
+	let accessJwt: string;
 
 	beforeAll(async () => {
-		agent = createAgent();
-		// TODO: Implement Farcaster Quick Auth login for e2e tests
+		await seedTestAccount();
+		accessJwt = await createTestJwt();
 	});
+
+	/**
+	 * Open a WebSocket to the firehose with the correct Host header.
+	 */
+	function openFirehose(cursor?: number): WebSocket {
+		return openFirehoseForHost(TEST_HOST, cursor);
+	}
+
+	function openFirehoseForHost(host: string, cursor?: number): WebSocket {
+		const port = getPort();
+		const qs = cursor !== undefined ? `?cursor=${cursor}` : "";
+		const url = `ws://localhost:${port}/xrpc/com.atproto.sync.subscribeRepos${qs}`;
+		return new WebSocket(url, { headers: { "X-Test-Host": host } });
+	}
+
+	/**
+	 * Wait for a WebSocket to connect, with timeout.
+	 */
+	function waitForOpen(ws: WebSocket, timeoutMs = 5000): Promise<void> {
+		return new Promise((resolve, reject) => {
+			const timeout = setTimeout(() => {
+				ws.close();
+				reject(new Error("WebSocket connection timeout"));
+			}, timeoutMs);
+			ws.on("open", () => {
+				clearTimeout(timeout);
+				resolve();
+			});
+			ws.on("error", (err) => {
+				clearTimeout(timeout);
+				reject(err);
+			});
+		});
+	}
+
+	/**
+	 * Collect messages for a duration, then return them.
+	 */
+	function collectMessages(
+		ws: WebSocket,
+		durationMs: number,
+	): Promise<Buffer[]> {
+		return new Promise((resolve) => {
+			const messages: Buffer[] = [];
+			ws.on("message", (data: Buffer) => messages.push(data));
+			setTimeout(() => resolve(messages), durationMs);
+		});
+	}
 
 	it("connects to WebSocket endpoint", async () => {
-		const port = getPort();
-		const wsUrl = `ws://localhost:${port}/xrpc/com.atproto.sync.subscribeRepos`;
-
-		const ws = new WebSocket(wsUrl);
-
-		await new Promise<void>((resolve, reject) => {
-			const timeout = setTimeout(() => {
-				ws.close();
-				reject(new Error("WebSocket connection timeout"));
-			}, 5000);
-
-			ws.on("open", () => {
-				clearTimeout(timeout);
-				resolve();
-			});
-			ws.on("error", (err) => {
-				clearTimeout(timeout);
-				reject(err);
-			});
-		});
-
+		const ws = openFirehose();
+		await waitForOpen(ws);
 		ws.close();
 	});
 
-	// Skip tests that require authentication
-	it.skip("receives commit events when records are created", async () => {
-		const port = getPort();
-		const wsUrl = `ws://localhost:${port}/xrpc/com.atproto.sync.subscribeRepos`;
+	it("returns 400 for non-WebSocket requests", async () => {
+		const res = await fetchWithHost(
+			"/xrpc/com.atproto.sync.subscribeRepos",
+		);
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { error: string };
+		expect(body.error).toBe("InvalidRequest");
+	});
 
-		const messages: Buffer[] = [];
-		const ws = new WebSocket(wsUrl);
+	it("emits identity event on first connection (no cursor)", async () => {
+		const ws = openFirehose();
+		await waitForOpen(ws);
 
-		await new Promise<void>((resolve, reject) => {
-			const timeout = setTimeout(() => {
-				ws.close();
-				reject(new Error("WebSocket connection timeout"));
-			}, 5000);
-
-			ws.on("open", () => {
-				clearTimeout(timeout);
-				resolve();
-			});
-			ws.on("error", (err) => {
-				clearTimeout(timeout);
-				reject(err);
-			});
-		});
-
-		ws.on("message", (data: Buffer) => {
-			messages.push(data);
-		});
-
-		// Create a record - should trigger event
-		const rkey = uniqueRkey();
-		await agent.com.atproto.repo.createRecord({
-			repo: TEST_DID,
-			collection: "app.bsky.feed.post",
-			rkey,
-			record: {
-				$type: "app.bsky.feed.post",
-				text: "Firehose test post",
-				createdAt: new Date().toISOString(),
-			},
-		});
-
-		// Wait for event to arrive
-		await new Promise((r) => setTimeout(r, 1000));
-
+		const messages = await collectMessages(ws, 2000);
 		ws.close();
 
-		// Should have received at least one message
+		// Should receive at least the identity event
 		expect(messages.length).toBeGreaterThan(0);
 
-		// Messages should be binary (CBOR frames)
-		for (const msg of messages) {
-			expect(Buffer.isBuffer(msg)).toBe(true);
-		}
+		// First message should be an identity event (#identity in CBOR)
+		const firstMsg = messages[0]!;
+		const hex = firstMsg.toString("hex");
+		expect(hex).toContain("236964656e74697479"); // "#identity"
 	});
 
-	it.skip("supports cursor-based backfill", async () => {
-		// Create some records first to have history
-		for (let i = 0; i < 3; i++) {
-			await agent.com.atproto.repo.createRecord({
-				repo: TEST_DID,
-				collection: "app.bsky.feed.post",
-				rkey: uniqueRkey(),
-				record: {
-					$type: "app.bsky.feed.post",
-					text: `Backfill test ${i}`,
-					createdAt: new Date().toISOString(),
+	it("receives commit events when records are created", async () => {
+		const ws = openFirehose();
+		await waitForOpen(ws);
+
+		// Drain any initial messages (identity event)
+		await collectMessages(ws, 500);
+
+		// Start collecting new messages
+		const messagesPromise = collectMessages(ws, 2000);
+
+		// Create a record
+		const rkey = uniqueRkey();
+		const res = await fetchWithHost(
+			"/xrpc/com.atproto.repo.createRecord",
+			{
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Authorization: `Bearer ${accessJwt}`,
 				},
-			});
+				body: JSON.stringify({
+					repo: TEST_DID,
+					collection: "app.bsky.feed.post",
+					rkey,
+					record: {
+						$type: "app.bsky.feed.post",
+						text: "Firehose test post",
+						createdAt: new Date().toISOString(),
+					},
+				}),
+			},
+		);
+		expect(res.status).toBe(200);
+
+		const messages = await messagesPromise;
+		ws.close();
+
+		// Should have received the commit event
+		expect(messages.length).toBeGreaterThan(0);
+
+		// Should be a #commit frame (CBOR)
+		const hex = messages[0]!.toString("hex");
+		expect(hex).toContain("23636f6d6d6974"); // "#commit"
+	});
+
+	it("supports cursor-based backfill", async () => {
+		// Create some records to have firehose history
+		for (let i = 0; i < 3; i++) {
+			const res = await fetchWithHost(
+				"/xrpc/com.atproto.repo.createRecord",
+				{
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						Authorization: `Bearer ${accessJwt}`,
+					},
+					body: JSON.stringify({
+						repo: TEST_DID,
+						collection: "app.bsky.feed.post",
+						rkey: uniqueRkey(),
+						record: {
+							$type: "app.bsky.feed.post",
+							text: `Backfill test ${i}`,
+							createdAt: new Date().toISOString(),
+						},
+					}),
+				},
+			);
+			expect(res.status).toBe(200);
 		}
 
-		const port = getPort();
 		// Connect with cursor=0 to get all events from the beginning
-		const wsUrl = `ws://localhost:${port}/xrpc/com.atproto.sync.subscribeRepos?cursor=0`;
+		const ws = openFirehose(0);
+		await waitForOpen(ws);
 
-		const messages: Buffer[] = [];
-		const ws = new WebSocket(wsUrl);
-
-		await new Promise<void>((resolve, reject) => {
-			const timeout = setTimeout(() => {
-				ws.close();
-				reject(new Error("WebSocket connection timeout"));
-			}, 5000);
-
-			ws.on("open", () => {
-				clearTimeout(timeout);
-				resolve();
-			});
-			ws.on("error", (err) => {
-				clearTimeout(timeout);
-				reject(err);
-			});
-		});
-
-		ws.on("message", (data: Buffer) => {
-			messages.push(data);
-		});
-
-		// Wait for backfill to complete
-		await new Promise((r) => setTimeout(r, 2000));
-
+		const messages = await collectMessages(ws, 2000);
 		ws.close();
 
 		// Should have received multiple backfilled events
-		expect(messages.length).toBeGreaterThan(0);
+		expect(messages.length).toBeGreaterThan(3);
+	});
+
+	it("returns 410 for deleted account firehose", async () => {
+		const deletedFid = "4";
+
+		// Seed and delete the account
+		await seedTestAccount(deletedFid);
+		const deleteRes = await fetch(`${getBaseUrl()}/__test/delete`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ fid: deletedFid }),
+		});
+		expect(deleteRes.ok).toBe(true);
+
+		// Non-WebSocket request should get 410
+		const deletedHost = `${deletedFid}.${TEST_DOMAIN}`;
+		const res = await fetchWithHost(
+			"/xrpc/com.atproto.sync.subscribeRepos",
+			undefined,
+			deletedHost,
+		);
+		expect(res.status).toBe(410);
+		const body = (await res.json()) as { error: string };
+		expect(body.error).toBe("AccountNotFound");
 	});
 
 	it("closes connection gracefully", async () => {
-		const port = getPort();
-		const wsUrl = `ws://localhost:${port}/xrpc/com.atproto.sync.subscribeRepos`;
+		const ws = openFirehose();
+		await waitForOpen(ws);
 
-		const ws = new WebSocket(wsUrl);
-
-		await new Promise<void>((resolve, reject) => {
-			const timeout = setTimeout(() => {
-				ws.close();
-				reject(new Error("WebSocket connection timeout"));
-			}, 5000);
-
-			ws.on("open", () => {
-				clearTimeout(timeout);
-				resolve();
-			});
-			ws.on("error", (err) => {
-				clearTimeout(timeout);
-				reject(err);
-			});
-		});
-
-		// Gracefully close
 		const closePromise = new Promise<void>((resolve) => {
 			ws.on("close", () => resolve());
 		});

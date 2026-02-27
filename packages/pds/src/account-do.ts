@@ -741,18 +741,48 @@ export class AccountDurableObject extends DurableObject<PDSEnv> {
 	}
 
 	/**
-	 * RPC method: Get repo status
+	 * RPC method: Get repo status including lifecycle state.
 	 */
 	async rpcGetRepoStatus(): Promise<{
 		did: string;
 		head: string;
 		rev: string;
+		active: boolean;
+		status: string;
 	}> {
+		const storage = await this.getStorage();
+		const status = storage.getStatus();
+		const did = storage.getAtprotoDid();
+
+		// No identity: either never created or legacy-deleted (old deleteAll)
+		if (!did) {
+			return {
+				did: "",
+				head: "",
+				rev: "",
+				active: false,
+				status: "deleted",
+			};
+		}
+
+		// Deleted accounts have no repo (keys and blocks cleared)
+		if (status === "deleted") {
+			return {
+				did,
+				head: "",
+				rev: "",
+				active: false,
+				status: "deleted",
+			};
+		}
+
 		const repo = await this.getRepo();
 		return {
 			did: repo.did,
 			head: repo.cid.toString(),
 			rev: repo.commit.rev,
+			active: status === "active",
+			status,
 		};
 	}
 
@@ -937,6 +967,7 @@ export class AccountDurableObject extends DurableObject<PDSEnv> {
 	 * RPC method: Upload a blob to R2
 	 */
 	async rpcUploadBlob(bytes: Uint8Array, mimeType: string): Promise<BlobRef> {
+		await this.ensureRepoInitialized();
 		if (!this.blobStore) {
 			throw new Error("Blob storage not configured");
 		}
@@ -1084,6 +1115,18 @@ export class AccountDurableObject extends DurableObject<PDSEnv> {
 	async handleFirehoseUpgrade(request: Request): Promise<Response> {
 		await this.ensureStorageInitialized();
 
+		// If the account is deleted or never created, return a non-WebSocket
+		// error. TODO: implement proper #account tombstone over WebSocket.
+		if (
+			!this.storage!.hasAtprotoIdentity() ||
+			this.storage!.getStatus() === "deleted"
+		) {
+			return new Response(
+				JSON.stringify({ error: "AccountNotFound", message: "Account deleted" }),
+				{ status: 410, headers: { "Content-Type": "application/json" } },
+			);
+		}
+
 		const url = new URL(request.url);
 		const cursorParam = url.searchParams.get("cursor");
 		const cursor = cursorParam ? parseInt(cursorParam, 10) : null;
@@ -1111,6 +1154,46 @@ export class AccountDurableObject extends DurableObject<PDSEnv> {
 			status: 101,
 			webSocket: client,
 		});
+	}
+
+	/**
+	 * Send a tombstone #account event over WebSocket, then close.
+	 * Used for deleted or never-created accounts.
+	 */
+	private sendFirehoseTombstone(request: Request): Response {
+		const pair = new WebSocketPair();
+		const client = pair[0];
+		const server = pair[1];
+
+		// Use stored DID if available, otherwise derive from hostname
+		let did = this.storage?.getAtprotoDid();
+		if (!did) {
+			const url = new URL(request.url);
+			did = `did:web:${url.hostname}`;
+		}
+
+		// Build tombstone frame
+		const header = { op: 1, t: "#account" };
+		const body = {
+			seq: 0,
+			did,
+			time: new Date().toISOString(),
+			active: false,
+			status: "deleted",
+		};
+		const headerBytes = cborEncode(header as any);
+		const bodyBytes = cborEncode(body as any);
+		const tombstoneFrame = new Uint8Array(headerBytes.length + bodyBytes.length);
+		tombstoneFrame.set(headerBytes, 0);
+		tombstoneFrame.set(bodyBytes, headerBytes.length);
+
+		// Use raw accept() instead of hibernation API — we just need to
+		// send one frame and close, no need for hibernation lifecycle.
+		server.accept();
+		server.send(tombstoneFrame);
+		server.close(1000, "AccountDeleted");
+
+		return new Response(null, { status: 101, webSocket: client });
 	}
 
 	/**
@@ -1176,19 +1259,12 @@ export class AccountDurableObject extends DurableObject<PDSEnv> {
 	}
 
 	/**
-	 * RPC method: Get account activation state
-	 */
-	async rpcGetActive(): Promise<boolean> {
-		const storage = await this.getStorage();
-		return storage.getActive();
-	}
-
-	/**
 	 * RPC method: Activate account
 	 */
 	async rpcActivateAccount(): Promise<void> {
 		const storage = await this.getStorage();
-		await storage.setActive(true);
+		storage.setStatus("active");
+		await this.rpcEmitAccountEvent(true);
 	}
 
 	/**
@@ -1196,7 +1272,69 @@ export class AccountDurableObject extends DurableObject<PDSEnv> {
 	 */
 	async rpcDeactivateAccount(): Promise<void> {
 		const storage = await this.getStorage();
-		await storage.setActive(false);
+		storage.setStatus("deactivated");
+		await this.rpcEmitAccountEvent(false, "deactivated");
+	}
+
+	/**
+	 * RPC method: Set repo status directly (active, deactivated, deleted).
+	 * Used by debug tools — does NOT delete data, only sets the status flag.
+	 */
+	async rpcSetRepoStatus(status: string): Promise<void> {
+		const storage = await this.getStorage();
+		storage.setStatus(status);
+		const active = status === "active";
+		await this.rpcEmitAccountEvent(active, active ? undefined : status);
+	}
+
+	/**
+	 * RPC method: Emit an #account event to the firehose.
+	 * Notifies relays of account lifecycle changes (activation, deactivation, deletion).
+	 */
+	async rpcEmitAccountEvent(
+		active: boolean,
+		status?: string,
+	): Promise<{ seq: number }> {
+		await this.ensureStorageInitialized();
+
+		const did = this.storage!.getAtprotoDid();
+		if (!did) {
+			throw new Error("No DID found for account event");
+		}
+
+		const time = new Date().toISOString();
+
+		const result = this.ctx.storage.sql
+			.exec(
+				`INSERT INTO firehose_events (event_type, payload)
+				 VALUES ('account', ?)
+				 RETURNING seq`,
+				new Uint8Array(0),
+			)
+			.one();
+		const seq = result.seq as number;
+
+		const header = { op: 1, t: "#account" };
+		const body: Record<string, unknown> = { seq, did, time, active };
+		if (status) {
+			body.status = status;
+		}
+
+		const headerBytes = cborEncode(header);
+		const bodyBytes = cborEncode(body);
+		const frame = new Uint8Array(headerBytes.length + bodyBytes.length);
+		frame.set(headerBytes, 0);
+		frame.set(bodyBytes, headerBytes.length);
+
+		for (const ws of this.ctx.getWebSockets()) {
+			try {
+				ws.send(frame);
+			} catch (e) {
+				console.error("Error broadcasting account event:", e);
+			}
+		}
+
+		return { seq };
 	}
 
 	// ============================================
@@ -1341,6 +1479,24 @@ export class AccountDurableObject extends DurableObject<PDSEnv> {
 		return { seq };
 	}
 
+	/**
+	 * RPC method: Check if a FID-PDS account exists.
+	 * Returns true if an AT Protocol identity has been created for this FID.
+	 * This checks identity existence only — a "deleted" repo status still means
+	 * the account exists (the user can still manage their DID document).
+	 */
+	async rpcAccountExists(): Promise<boolean> {
+		await this.ensureStorageInitialized();
+		return this.storage!.hasAtprotoIdentity();
+	}
+
+	/** Get the account status (active, deactivated, deleted, or null if no identity) */
+	async rpcGetAccountStatus(): Promise<string | null> {
+		await this.ensureStorageInitialized();
+		if (!this.storage!.hasAtprotoIdentity()) return null;
+		return this.storage!.getStatus();
+	}
+
 	// ============================================
 	// Health Check RPC Methods
 	// ============================================
@@ -1358,15 +1514,14 @@ export class AccountDurableObject extends DurableObject<PDSEnv> {
 	 */
 	async rpcGetFirehoseStatus(): Promise<{
 		subscribers: number;
-		latestSeq: number | null;
+		latestSeq: number;
 	}> {
 		const sockets = this.ctx.getWebSockets();
 		await this.ensureStorageInitialized();
-		const storage = await this.getStorage();
-		const seq = await storage.getSeq();
+		const seq = this.sequencer!.getLatestSeq();
 		return {
 			subscribers: sockets.length,
-			latestSeq: seq || null,
+			latestSeq: seq,
 		};
 	}
 
@@ -1555,45 +1710,89 @@ export class AccountDurableObject extends DurableObject<PDSEnv> {
 	// ============================================
 
 	/**
-	 * RPC method: Delete the entire account.
-	 * Removes R2 blobs, wipes all DO storage, and resets in-memory state.
-	 * After this, rpcGetAtprotoPublicKey() returns null so the DID doc 404s.
+	 * RPC method: Delete an account (tombstone-preserving).
+	 *
+	 * Removes R2 blobs, clears bulk data and signing keys via targeted SQL
+	 * DELETEs, and marks the account as deleted. The DID and handle are
+	 * retained so the DO can still serve tombstone responses (firehose
+	 * #account events, DID doc 404s).
+	 *
+	 * Uses targeted SQL DELETEs instead of ctx.storage.deleteAll() because
+	 * deleteAll() destroys the SQLite database, making the DO unable to
+	 * handle subsequent requests (e.g. firehose tombstone WebSocket upgrades).
 	 */
-	async rpcDeleteAccount(): Promise<void> {
-		// 1. Delete all R2 blobs (must happen before storage wipe)
-		if (this.blobStore) {
-			await this.blobStore.deleteAllBlobs();
-		} else if (this.env.BLOBS && this.cachedIdentity) {
-			// Blob store not yet initialized — create temporary one
-			const blobStore = new BlobStore(this.env.BLOBS, this.cachedIdentity.did);
-			await blobStore.deleteAllBlobs();
-		}
+	async rpcDeleteRepo(): Promise<void> {
+		await this.ensureStorageInitialized();
 
-		// 2. Close all firehose WebSocket connections
+		// 1. Emit #account deletion event and broadcast to connected clients
+		await this.rpcEmitAccountEvent(false, "deleted");
+
+		// 2. Close all active WebSocket connections
 		for (const ws of this.ctx.getWebSockets()) {
 			try {
-				ws.close(1001, "Account deleted");
-			} catch {
-				// Already closed
+				ws.close(1000, "AccountDeleted");
+			} catch (_) {
+				// ignore already-closed sockets
 			}
 		}
 
-		// 3. Delete any pending alarms
+		// 3. Delete R2 blobs
+		if (this.env.BLOBS) {
+			const did = this.storage!.getAtprotoDid();
+			if (did) {
+				const store = new BlobStore(this.env.BLOBS, did);
+				await store.deleteAllBlobs();
+			}
+		}
+
+		// 4. Mark account as deleted (tombstone-preserving)
+		this.storage!.setStatus("deleted");
+		this.storage!.clearSigningKeys();
+		this.storage!.clearBulkData();
+
+		// 5. Delete all firehose events except the tombstone #account event
+		const tombstoneSeq = this.ctx.storage.sql
+			.exec(
+				`SELECT MAX(seq) as seq FROM firehose_events WHERE event_type = 'account'`,
+			)
+			.one();
+		if (tombstoneSeq?.seq) {
+			this.ctx.storage.sql.exec(
+				`DELETE FROM firehose_events WHERE seq < ?`,
+				tombstoneSeq.seq as number,
+			);
+		}
+
+		// 6. Clear OAuth data
+		if (this.oauthStorage) {
+			this.ctx.storage.sql.exec("DELETE FROM oauth_auth_codes");
+			this.ctx.storage.sql.exec("DELETE FROM oauth_tokens");
+			this.ctx.storage.sql.exec("DELETE FROM oauth_clients");
+			this.ctx.storage.sql.exec("DELETE FROM oauth_par_requests");
+			this.ctx.storage.sql.exec("DELETE FROM oauth_nonces");
+			this.ctx.storage.sql.exec("DELETE FROM oauth_webauthn_challenges");
+		}
+
+		// 7. Cancel periodic cleanup alarm
 		await this.ctx.storage.deleteAlarm();
 
-		// 4. Wipe all DO storage (SQLite tables, KV, alarms)
-		await this.ctx.storage.deleteAll();
-
-		// 5. Reset in-memory state
+		// 8. Reset in-memory state
 		this.repo = null;
 		this.keypair = null;
 		this.blobStore = null;
-		this.sequencer = null;
-		this.storage = null;
-		this.oauthStorage = null;
 		this.cachedIdentity = null;
-		this.storageInitialized = false;
 		this.repoInitialized = false;
+	}
+
+	/**
+	 * Advance the firehose seq floor past a given value.
+	 * Used manually to fix FutureCursor issues when a relay's cursor
+	 * is ahead of the PDS seq (e.g. after account deletion/recreation).
+	 */
+	async rpcSyncRelaySeq(floor: number): Promise<{ newSeq: number }> {
+		await this.ensureStorageInitialized();
+		this.sequencer!.setSeqFloor(floor);
+		return { newSeq: this.sequencer!.getLatestSeq() };
 	}
 
 	// ============================================
@@ -1652,6 +1851,18 @@ export class AccountDurableObject extends DurableObject<PDSEnv> {
 	async rpcSetCustomPdsUrl(url: string | null): Promise<void> {
 		const storage = await this.getStorage();
 		storage.setCustomPdsUrl(url);
+	}
+
+	/** Get the custom verification key for this account */
+	async rpcGetCustomVerificationKey(): Promise<string | null> {
+		const storage = await this.getStorage();
+		return storage.getCustomVerificationKey();
+	}
+
+	/** Set the custom verification key for this account */
+	async rpcSetCustomVerificationKey(key: string | null): Promise<void> {
+		const storage = await this.getStorage();
+		storage.setCustomVerificationKey(key);
 	}
 
 	/**

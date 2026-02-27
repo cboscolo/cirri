@@ -1,19 +1,36 @@
 import { describe, it, expect } from "vitest";
-import { env, worker, runInDurableObject } from "./helpers";
+import {
+	env,
+	worker,
+	runInDurableObject,
+	getTestAccountStub,
+	seedIdentity,
+	createTestAccessToken,
+	testUrl,
+	TEST_DID,
+} from "./helpers";
 import { asCid, isBlobRef } from "@atproto/lex-data";
 import type { AccountDurableObject } from "../src/account-do";
 
 describe("Blob Reference Normalization", () => {
 	it("should normalize JSON blob refs to CID objects in stored records", async () => {
+		// Seed identity in the DO
+		const stub = getTestAccountStub();
+		await runInDurableObject(stub, async (instance: AccountDurableObject) => {
+			await seedIdentity(instance);
+		});
+
+		const accessToken = await createTestAccessToken();
+
 		// Step 1: Upload a blob to get a real CID
 		const pngHeader = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 
 		const uploadResponse = await worker.fetch(
-			new Request("http://pds.test/xrpc/com.atproto.repo.uploadBlob", {
+			new Request(testUrl("/xrpc/com.atproto.repo.uploadBlob"), {
 				method: "POST",
 				headers: {
 					"Content-Type": "image/png",
-					Authorization: `Bearer ${env.AUTH_TOKEN}`,
+					Authorization: `Bearer ${accessToken}`,
 				},
 				body: pngHeader,
 			}),
@@ -32,17 +49,15 @@ describe("Blob Reference Normalization", () => {
 		const blobCid = uploadData.blob.ref.$link;
 
 		// Step 2: Create a record with the blob ref in JSON wire format
-		// This is exactly what clients send — { "$link": "bafk..." } objects,
-		// not actual CID instances
 		const createResponse = await worker.fetch(
-			new Request("http://pds.test/xrpc/com.atproto.repo.createRecord", {
+			new Request(testUrl("/xrpc/com.atproto.repo.createRecord"), {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
-					Authorization: `Bearer ${env.AUTH_TOKEN}`,
+					Authorization: `Bearer ${accessToken}`,
 				},
 				body: JSON.stringify({
-					repo: env.DID,
+					repo: TEST_DID,
 					collection: "app.bsky.feed.post",
 					rkey: "blob-ref-test",
 					record: {
@@ -73,7 +88,9 @@ describe("Blob Reference Normalization", () => {
 		// Step 3: Read it back via the API — should round-trip correctly
 		const getResponse = await worker.fetch(
 			new Request(
-				`http://pds.test/xrpc/com.atproto.repo.getRecord?repo=${env.DID}&collection=app.bsky.feed.post&rkey=blob-ref-test`,
+				testUrl(
+					`/xrpc/com.atproto.repo.getRecord?repo=${TEST_DID}&collection=app.bsky.feed.post&rkey=blob-ref-test`,
+				),
 			),
 			env,
 		);
@@ -100,10 +117,6 @@ describe("Blob Reference Normalization", () => {
 		expect(apiImage.mimeType).toBe("image/png");
 
 		// Step 4: Inspect the raw stored record via the repo directly
-		// This verifies the internal representation uses CID objects, not JSON
-		const id = env.ACCOUNT.idFromName("account");
-		const stub = env.ACCOUNT.get(id);
-
 		await runInDurableObject(stub, async (instance: AccountDurableObject) => {
 			const repo = await instance.getRepo();
 			const rawRecord = (await repo.getRecord(
@@ -128,19 +141,28 @@ describe("Blob Reference Normalization", () => {
 	});
 
 	it("should normalize blob refs in putRecord (upsert)", async () => {
+		const stub = getTestAccountStub();
+		await runInDurableObject(stub, async (instance: AccountDurableObject) => {
+			await seedIdentity(instance);
+		});
+
+		const accessToken = await createTestAccessToken();
+
 		// Upload a blob
 		const testData = new Uint8Array([255, 216, 255, 224, 0, 16, 74, 70]);
 		const uploadResponse = await worker.fetch(
-			new Request("http://pds.test/xrpc/com.atproto.repo.uploadBlob", {
+			new Request(testUrl("/xrpc/com.atproto.repo.uploadBlob"), {
 				method: "POST",
 				headers: {
 					"Content-Type": "image/jpeg",
-					Authorization: `Bearer ${env.AUTH_TOKEN}`,
+					Authorization: `Bearer ${accessToken}`,
 				},
 				body: testData,
 			}),
 			env,
 		);
+		expect(uploadResponse.status).toBe(200);
+
 		const uploadData = (await uploadResponse.json()) as {
 			blob: { ref: { $link: string }; mimeType: string; size: number };
 		};
@@ -148,14 +170,14 @@ describe("Blob Reference Normalization", () => {
 
 		// Use putRecord (upsert) with a blob ref
 		const putResponse = await worker.fetch(
-			new Request("http://pds.test/xrpc/com.atproto.repo.putRecord", {
+			new Request(testUrl("/xrpc/com.atproto.repo.putRecord"), {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
-					Authorization: `Bearer ${env.AUTH_TOKEN}`,
+					Authorization: `Bearer ${accessToken}`,
 				},
 				body: JSON.stringify({
-					repo: env.DID,
+					repo: TEST_DID,
 					collection: "app.bsky.feed.post",
 					rkey: "blob-ref-put-test",
 					record: {
@@ -184,9 +206,6 @@ describe("Blob Reference Normalization", () => {
 		expect(putResponse.status).toBe(200);
 
 		// Verify via raw repo access
-		const id = env.ACCOUNT.idFromName("account");
-		const stub = env.ACCOUNT.get(id);
-
 		await runInDurableObject(stub, async (instance: AccountDurableObject) => {
 			const repo = await instance.getRepo();
 			const rawRecord = (await repo.getRecord(
@@ -201,19 +220,28 @@ describe("Blob Reference Normalization", () => {
 	});
 
 	it("should normalize blob refs in applyWrites batch", async () => {
+		const stub = getTestAccountStub();
+		await runInDurableObject(stub, async (instance: AccountDurableObject) => {
+			await seedIdentity(instance);
+		});
+
+		const accessToken = await createTestAccessToken();
+
 		// Upload a blob
 		const testData = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 		const uploadResponse = await worker.fetch(
-			new Request("http://pds.test/xrpc/com.atproto.repo.uploadBlob", {
+			new Request(testUrl("/xrpc/com.atproto.repo.uploadBlob"), {
 				method: "POST",
 				headers: {
 					"Content-Type": "image/png",
-					Authorization: `Bearer ${env.AUTH_TOKEN}`,
+					Authorization: `Bearer ${accessToken}`,
 				},
 				body: testData,
 			}),
 			env,
 		);
+		expect(uploadResponse.status).toBe(200);
+
 		const uploadData = (await uploadResponse.json()) as {
 			blob: { ref: { $link: string }; mimeType: string; size: number };
 		};
@@ -221,14 +249,14 @@ describe("Blob Reference Normalization", () => {
 
 		// Use applyWrites with a blob ref
 		const applyResponse = await worker.fetch(
-			new Request("http://pds.test/xrpc/com.atproto.repo.applyWrites", {
+			new Request(testUrl("/xrpc/com.atproto.repo.applyWrites"), {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
-					Authorization: `Bearer ${env.AUTH_TOKEN}`,
+					Authorization: `Bearer ${accessToken}`,
 				},
 				body: JSON.stringify({
-					repo: env.DID,
+					repo: TEST_DID,
 					writes: [
 						{
 							$type: "com.atproto.repo.applyWrites#create",
@@ -262,9 +290,6 @@ describe("Blob Reference Normalization", () => {
 		expect(applyResponse.status).toBe(200);
 
 		// Verify via raw repo access
-		const id = env.ACCOUNT.idFromName("account");
-		const stub = env.ACCOUNT.get(id);
-
 		await runInDurableObject(stub, async (instance: AccountDurableObject) => {
 			const repo = await instance.getRepo();
 			const rawRecord = (await repo.getRecord(

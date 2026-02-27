@@ -154,97 +154,109 @@ export async function getSession(
 	c: Context<AppEnv>,
 	getAccountDO: GetAccountDO,
 ): Promise<Response> {
-	const authHeader = c.req.header("Authorization");
-
-	if (!authHeader?.startsWith("Bearer ")) {
-		return c.json(
-			{
-				error: "AuthenticationRequired",
-				message: "Access token required",
-			},
-			401,
-		);
-	}
-
-	const token = authHeader.slice(7);
-
-	// Derive service DID from request hostname (per-user subdomain mode)
-	const hostname = new URL(c.req.url).hostname;
 	const domain = c.env.WEBFID_DOMAIN;
-	const hostFid = hostnameToFid(hostname, domain);
-	if (!hostFid) {
-		return c.json(
-			{
-				error: "InvalidRequest",
-				message: "Invalid hostname - must use WebFID subdomain",
-			},
-			400,
-		);
-	}
-	const serviceDid = fidToDid(hostFid, domain);
 
-	try {
-		const payload = await verifyAccessToken(
-			token,
-			c.env.JWT_SECRET,
-			serviceDid,
-		);
+	// Check if DPoP middleware already verified the token
+	const dpopDid = c.get("did" as never) as string | undefined;
 
-		const sub = payload.sub;
-		if (!sub) {
+	let did: string;
+
+	if (dpopDid) {
+		// OAuth DPoP token — already verified by middleware
+		did = dpopDid;
+	} else {
+		// Fall back to Bearer JWT verification
+		const authHeader = c.req.header("Authorization");
+
+		if (!authHeader?.startsWith("Bearer ")) {
 			return c.json(
 				{
 					error: "AuthenticationRequired",
-					message: "Invalid access token",
+					message: "Access token required",
 				},
 				401,
 			);
 		}
 
-		const did = sub;
-		const accountDO = getAccountDO(c.env, did);
-		const exists = await accountDO.rpcHasAtprotoIdentity();
-		if (!exists) {
+		const token = authHeader.slice(7);
+
+		// Derive service DID from request hostname (per-user subdomain mode)
+		const hostname = new URL(c.req.url).hostname;
+		const hostFid = hostnameToFid(hostname, domain);
+		if (!hostFid) {
 			return c.json(
 				{
-					error: "AccountNotFound",
-					message: "Account not found",
-				},
-				401,
-			);
-		}
-
-		// Derive handle from DID
-		const fid = didToFid(did, domain);
-		const handle = fid ? fidToHandle(fid, domain) : did.replace("did:web:", "");
-
-		const { email: storedEmail } = await accountDO.rpcGetEmail();
-		const email = storedEmail || c.env.EMAIL;
-
-		return c.json({
-			handle,
-			did,
-			...(email ? { email } : {}),
-			active: true,
-		});
-	} catch (err) {
-		if (err instanceof TokenExpiredError) {
-			return c.json(
-				{
-					error: "ExpiredToken",
-					message: err.message,
+					error: "InvalidRequest",
+					message: "Invalid hostname - must use WebFID subdomain",
 				},
 				400,
 			);
 		}
+		const serviceDid = fidToDid(hostFid, domain);
+
+		try {
+			const payload = await verifyAccessToken(
+				token,
+				c.env.JWT_SECRET,
+				serviceDid,
+			);
+
+			const sub = payload.sub;
+			if (!sub) {
+				return c.json(
+					{
+						error: "AuthenticationRequired",
+						message: "Invalid access token",
+					},
+					401,
+				);
+			}
+			did = sub;
+		} catch (err) {
+			if (err instanceof TokenExpiredError) {
+				return c.json(
+					{
+						error: "ExpiredToken",
+						message: err.message,
+					},
+					400,
+				);
+			}
+			return c.json(
+				{
+					error: "InvalidToken",
+					message: err instanceof Error ? err.message : "Invalid access token",
+				},
+				401,
+			);
+		}
+	}
+
+	const accountDO = getAccountDO(c.env, did);
+	const exists = await accountDO.rpcHasAtprotoIdentity();
+	if (!exists) {
 		return c.json(
 			{
-				error: "InvalidToken",
-				message: err instanceof Error ? err.message : "Invalid access token",
+				error: "AccountNotFound",
+				message: "Account not found",
 			},
 			401,
 		);
 	}
+
+	// Derive handle from DID
+	const fid = didToFid(did, domain);
+	const handle = fid ? fidToHandle(fid, domain) : did.replace("did:web:", "");
+
+	const { email: storedEmail } = await accountDO.rpcGetEmail();
+	const email = storedEmail || c.env.EMAIL;
+
+	return c.json({
+		handle,
+		did,
+		...(email ? { email } : {}),
+		active: true,
+	});
 }
 
 /**
@@ -263,8 +275,7 @@ export async function checkAccountStatus(
 	accountDO: DurableObjectStub<AccountDurableObject>,
 ): Promise<Response> {
 	try {
-		const status = await accountDO.rpcGetRepoStatus();
-		const active = await accountDO.rpcGetActive();
+		const repoStatus = await accountDO.rpcGetRepoStatus();
 
 		const [repoBlocks, indexedRecords, expectedBlobs, importedBlobs] =
 			await Promise.all([
@@ -274,14 +285,14 @@ export async function checkAccountStatus(
 				accountDO.rpcCountImportedBlobs(),
 			]);
 
-		const activated = active || indexedRecords > 0;
+		const activated = repoStatus.active || indexedRecords > 0;
 
 		return c.json({
 			activated,
-			active,
+			active: repoStatus.active,
 			validDid: true,
-			repoCommit: status.head,
-			repoRev: status.rev,
+			repoCommit: repoStatus.head,
+			repoRev: repoStatus.rev,
 			repoBlocks,
 			indexedRecords,
 			privateStateValues: null,

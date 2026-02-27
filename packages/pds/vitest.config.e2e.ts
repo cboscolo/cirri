@@ -10,7 +10,9 @@ export default defineConfig({
 		alias: {
 			// Help vitest find packages in node_modules (pnpm hoists to root)
 			"@atproto/api": resolve(rootDir, "node_modules/@atproto/api"),
+			"@atproto/crypto": resolve(rootDir, "node_modules/@atproto/crypto"),
 			"@ipld/car": resolve(rootDir, "node_modules/@ipld/car"),
+			jose: resolve(rootDir, "node_modules/jose"),
 			ws: resolve(rootDir, "node_modules/ws"),
 		},
 	},

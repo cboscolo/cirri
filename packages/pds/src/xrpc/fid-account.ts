@@ -95,10 +95,15 @@ export async function createAccount(
 	// Get the account's Durable Object (route by DID)
 	const accountDO = getAccountDO(c.env, did);
 
-	// Check if account already exists - if so, just return session tokens
-	// This makes account creation idempotent and handles race conditions from React Strict Mode
-	const exists = await accountDO.rpcHasAtprotoIdentity();
+	// Check if account already exists — handle idempotent creation
+	const exists = await accountDO.rpcAccountExists();
+
 	if (exists) {
+		// Account exists — return tokens (activate only if deactivated, not deleted)
+		const repoStatus = await accountDO.rpcGetRepoStatus();
+		if (repoStatus.status === "deactivated") {
+			await accountDO.rpcActivateAccount();
+		}
 		const accessJwt = await createAccessToken(c.env.JWT_SECRET, did, did);
 		const refreshJwt = await createRefreshToken(c.env.JWT_SECRET, did, did);
 		return c.json({
@@ -106,7 +111,7 @@ export async function createAccount(
 			refreshJwt,
 			handle,
 			did,
-			active: true,
+			active: repoStatus.status !== "deleted",
 		});
 	}
 
@@ -119,8 +124,6 @@ export async function createAccount(
 		.join("");
 	const signingKeyPublic = keypair.did().replace("did:key:", "");
 
-	// Store credentials in DO
-	// Handle race condition: if identity was created by concurrent request, return success anyway
 	try {
 		await accountDO.rpcSetAtprotoIdentity({
 			did,
@@ -130,8 +133,8 @@ export async function createAccount(
 		});
 	} catch (err) {
 		// Race condition: identity was created between our check and set
-		// This is fine - just return session tokens for the existing account
 		if (err instanceof Error && err.message.includes("already exists")) {
+			await accountDO.rpcActivateAccount();
 			const accessJwt = await createAccessToken(c.env.JWT_SECRET, did, did);
 			const refreshJwt = await createRefreshToken(c.env.JWT_SECRET, did, did);
 			return c.json({
@@ -143,6 +146,18 @@ export async function createAccount(
 			});
 		}
 		throw err;
+	}
+
+	// Explicitly activate the account (ensures status is correct after deleteAll/recreation)
+	await accountDO.rpcActivateAccount();
+
+	// Emit identity event so relays and AppView refresh their DID document cache.
+	// Critical after re-creation: the signing key changed, so downstream services
+	// need to fetch the new DID document to verify service JWTs.
+	try {
+		await accountDO.rpcEmitIdentityEvent(handle);
+	} catch {
+		// Best-effort — don't fail account creation
 	}
 
 	// Register user in global registry (if D1 database is configured)
@@ -228,8 +243,8 @@ export async function loginWithFarcaster(
 	// Get the account's Durable Object (route by DID)
 	const accountDO = getAccountDO(c.env, did);
 
-	// Check if account exists
-	const exists = await accountDO.rpcHasAtprotoIdentity();
+	// Check account exists
+	const exists = await accountDO.rpcAccountExists();
 	if (!exists) {
 		return c.json(
 			{
@@ -240,7 +255,6 @@ export async function loginWithFarcaster(
 		);
 	}
 
-	// Create session tokens with aud = user's PDS DID (did:web:NNN.fid.is)
 	const accessJwt = await createAccessToken(c.env.JWT_SECRET, did, did);
 	const refreshJwt = await createRefreshToken(c.env.JWT_SECRET, did, did);
 
@@ -254,19 +268,58 @@ export async function loginWithFarcaster(
 }
 
 /**
- * Login or create account with Sign In With Farcaster (SIWF).
- *
- * POST /xrpc/is.fid.auth.siwf
- * Input: { message: string, signature: string, fid: string, nonce: string }
- *
- * This endpoint verifies a SIWF signature and creates/logs in the account.
- * Used for browser-based authentication where Quick Auth isn't available.
+ * Verify SIWF credentials and return the FID.
+ * Shared by loginWithSiwf and createAccountSiwf.
  */
-export async function loginWithSiwf(
-	c: Context<AppEnv>,
-	getAccountDO: GetAccountDO,
-): Promise<Response> {
-	const body = await c.req
+async function verifySiwfCredentials(
+	body: { message: string; signature: `0x${string}`; fid: string; nonce: string },
+	domain: string,
+	alchemyApiKey?: string,
+): Promise<{ fid: string; farcasterAddress?: string }> {
+	const rpcUrl = alchemyApiKey
+		? `https://opt-mainnet.g.alchemy.com/v2/${alchemyApiKey}`
+		: undefined;
+	const appClient = createAppClient({
+		ethereum: viemConnector({ rpcUrl }),
+	});
+
+	const verifyResult = await appClient.verifySignInMessage({
+		message: body.message,
+		signature: body.signature,
+		domain,
+		nonce: body.nonce,
+	});
+
+	if (!verifyResult.success) {
+		throw new SiwfError("AuthenticationRequired", "Invalid SIWF signature", 401);
+	}
+
+	const fid = String(verifyResult.fid);
+	if (!/^[1-9]\d*$/.test(fid)) {
+		throw new SiwfError("InvalidRequest", "Invalid FID from SIWF verification", 400);
+	}
+	if (fid !== body.fid) {
+		throw new SiwfError("AuthenticationRequired", "FID mismatch", 401);
+	}
+
+	const farcasterAddress =
+		"address" in verifyResult ? (verifyResult.address as string) : undefined;
+
+	return { fid, farcasterAddress };
+}
+
+class SiwfError extends Error {
+	constructor(
+		public code: string,
+		message: string,
+		public status: number,
+	) {
+		super(message);
+	}
+}
+
+function parseSiwfBody(c: Context<AppEnv>) {
+	return c.req
 		.json<{
 			message: string;
 			signature: `0x${string}`;
@@ -274,7 +327,12 @@ export async function loginWithSiwf(
 			nonce: string;
 		}>()
 		.catch(() => null);
+}
 
+function validateSiwfBody(
+	c: Context<AppEnv>,
+	body: { message?: string; signature?: string; fid?: string; nonce?: string } | null,
+): Response | null {
 	if (!body?.message || !body?.signature || !body?.fid || !body?.nonce) {
 		return c.json(
 			{
@@ -284,99 +342,76 @@ export async function loginWithSiwf(
 			400,
 		);
 	}
+	return null;
+}
 
-	// Get domain from environment
+/**
+ * Check account existence by FID. Always returns 200.
+ *
+ * GET /xrpc/is.fid.account.status?fid=12345
+ * Response: { fid, exists: boolean }
+ */
+export async function getAccountStatus(
+	c: Context<AppEnv>,
+	getAccountDO: GetAccountDO,
+): Promise<Response> {
+	const fid = c.req.query("fid");
+	if (!fid || !/^[1-9]\d*$/.test(fid)) {
+		return c.json({ error: "InvalidRequest", message: "Missing or invalid fid parameter" }, 400);
+	}
+
 	const domain = c.env.WEBFID_DOMAIN;
-
-	// Create Farcaster auth client for verification
-	const appClient = createAppClient({
-		ethereum: viemConnector(),
-	});
-
-	// Verify the SIWF signature
-	const verifyResult = await appClient.verifySignInMessage({
-		message: body.message,
-		signature: body.signature,
-		domain,
-		nonce: body.nonce,
-	});
-
-	if (!verifyResult.success) {
-		return c.json(
-			{
-				error: "AuthenticationRequired",
-				message: "Invalid SIWF signature",
-			},
-			401,
-		);
-	}
-
-	// Verify the FID matches (verifyResult.fid is a number from the library)
-	const fid = String(verifyResult.fid);
-	if (!/^[1-9]\d*$/.test(fid)) {
-		return c.json(
-			{
-				error: "InvalidRequest",
-				message: "Invalid FID from SIWF verification",
-			},
-			400,
-		);
-	}
-	if (fid !== body.fid) {
-		return c.json(
-			{
-				error: "AuthenticationRequired",
-				message: "FID mismatch",
-			},
-			401,
-		);
-	}
-
-	// Derive DID and handle from FID
 	const did = fidToDid(fid, domain);
-	const handle = fidToHandle(fid, domain);
-
-	// Get the account's Durable Object
 	const accountDO = getAccountDO(c.env, did);
 
-	// Check if account exists
-	const existingAccount = await accountDO.rpcHasAtprotoIdentity();
-	let isNew = false;
+	const exists = await accountDO.rpcAccountExists();
+	return c.json({ fid, exists });
+}
 
-	// Extract custody address from SIWF verification result
-	const farcasterAddress =
-		"address" in verifyResult ? (verifyResult.address as string) : undefined;
+/**
+ * Login with Sign In With Farcaster (SIWF) — login only.
+ *
+ * POST /xrpc/is.fid.auth.siwf
+ * Input: { message: string, signature: string, fid: string, nonce: string }
+ *
+ * This endpoint verifies a SIWF signature and logs in an existing account.
+ * Returns 404 if the account doesn't exist.
+ */
+export async function loginWithSiwf(
+	c: Context<AppEnv>,
+	getAccountDO: GetAccountDO,
+): Promise<Response> {
+	const body = await parseSiwfBody(c);
+	const validationError = validateSiwfBody(c, body);
+	if (validationError) return validationError;
 
-	if (!existingAccount) {
-		// Create new account
-		const keypair = await Secp256k1Keypair.create({ exportable: true });
-		const signingKeyBytes = await keypair.export();
-		const signingKey = Array.from(signingKeyBytes)
-			.map((b) => b.toString(16).padStart(2, "0"))
-			.join("");
-		const signingKeyPublic = keypair.did().replace("did:key:", "");
+	const domain = c.env.WEBFID_DOMAIN;
 
-		await accountDO.rpcSetAtprotoIdentity({
-			did,
-			handle,
-			signingKey,
-			signingKeyPublic,
-		});
-
-		// Register user in global registry (if D1 database is configured)
-		if (c.env.USER_REGISTRY) {
-			await registerUser(
-				c.env.USER_REGISTRY,
-				fid,
-				signingKeyPublic,
-				farcasterAddress,
-			);
+	let fid: string;
+	try {
+		({ fid } = await verifySiwfCredentials(body!, domain, c.env.ALCHEMY_API_KEY));
+	} catch (err) {
+		if (err instanceof SiwfError) {
+			return c.json({ error: err.code, message: err.message }, err.status as any);
 		}
-
-		isNew = true;
+		throw err;
 	}
 
-	// Create session tokens with aud = user's PDS DID (did:web:NNN.fid.is)
+	const did = fidToDid(fid, domain);
+	const handle = fidToHandle(fid, domain);
+	const accountDO = getAccountDO(c.env, did);
+
+	const exists = await accountDO.rpcAccountExists();
+	if (!exists) {
+		return c.json(
+			{
+				error: "AccountNotFound",
+				message: `No account found for FID ${fid}. Use is.fid.account.createSiwf first.`,
+			},
+			404,
+		);
+	}
+
 	const accessJwt = await createAccessToken(c.env.JWT_SECRET, did, did);
 	const refreshJwt = await createRefreshToken(c.env.JWT_SECRET, did, did);
 
@@ -386,8 +421,157 @@ export async function loginWithSiwf(
 		handle,
 		did,
 		active: true,
-		isNew,
 	});
+}
+
+/**
+ * Create a new account using Sign In With Farcaster (SIWF).
+ *
+ * POST /xrpc/is.fid.account.createSiwf
+ * Input: { message: string, signature: string, fid: string, nonce: string }
+ *
+ * This endpoint verifies a SIWF signature and creates a new account.
+ * If the account already exists, returns session tokens (idempotent).
+ */
+export async function createAccountSiwf(
+	c: Context<AppEnv>,
+	getAccountDO: GetAccountDO,
+): Promise<Response> {
+	const body = await parseSiwfBody(c);
+	const validationError = validateSiwfBody(c, body);
+	if (validationError) return validationError;
+
+	const domain = c.env.WEBFID_DOMAIN;
+
+	let fid: string;
+	let farcasterAddress: string | undefined;
+	try {
+		({ fid, farcasterAddress } = await verifySiwfCredentials(body!, domain, c.env.ALCHEMY_API_KEY));
+	} catch (err) {
+		if (err instanceof SiwfError) {
+			return c.json({ error: err.code, message: err.message }, err.status as any);
+		}
+		throw err;
+	}
+
+	const did = fidToDid(fid, domain);
+	const handle = fidToHandle(fid, domain);
+	const accountDO = getAccountDO(c.env, did);
+
+	// Check if account already exists — handle idempotent creation
+	const exists = await accountDO.rpcAccountExists();
+
+	if (exists) {
+		// Account exists — return tokens (activate only if deactivated, not deleted)
+		const repoStatus = await accountDO.rpcGetRepoStatus();
+		if (repoStatus.status === "deactivated") {
+			await accountDO.rpcActivateAccount();
+		}
+		const accessJwt = await createAccessToken(c.env.JWT_SECRET, did, did);
+		const refreshJwt = await createRefreshToken(c.env.JWT_SECRET, did, did);
+		return c.json({
+			accessJwt,
+			refreshJwt,
+			handle,
+			did,
+			active: repoStatus.status !== "deleted",
+		});
+	}
+
+	// Generate new signing keypair
+	const keypair = await Secp256k1Keypair.create({ exportable: true });
+	const signingKeyBytes = await keypair.export();
+	const signingKey = Array.from(signingKeyBytes)
+		.map((b) => b.toString(16).padStart(2, "0"))
+		.join("");
+	const signingKeyPublic = keypair.did().replace("did:key:", "");
+
+	try {
+		await accountDO.rpcSetAtprotoIdentity({
+			did,
+			handle,
+			signingKey,
+			signingKeyPublic,
+		});
+	} catch (err) {
+		// Race condition: identity was created between our check and set
+		if (err instanceof Error && err.message.includes("already exists")) {
+			await accountDO.rpcActivateAccount();
+			const accessJwt = await createAccessToken(c.env.JWT_SECRET, did, did);
+			const refreshJwt = await createRefreshToken(c.env.JWT_SECRET, did, did);
+			return c.json({
+				accessJwt,
+				refreshJwt,
+				handle,
+				did,
+				active: true,
+			});
+		}
+		throw err;
+	}
+
+	// Explicitly activate the account (ensures status is correct after deleteAll/recreation)
+	await accountDO.rpcActivateAccount();
+
+	// Emit identity event so relays and AppView refresh their DID document cache.
+	try {
+		await accountDO.rpcEmitIdentityEvent(handle);
+	} catch {
+		// Best-effort — don't fail account creation
+	}
+
+	// Register user in global registry (if D1 database is configured)
+	if (c.env.USER_REGISTRY) {
+		await registerUser(
+			c.env.USER_REGISTRY,
+			fid,
+			signingKeyPublic,
+			farcasterAddress,
+		);
+	}
+
+	const accessJwt = await createAccessToken(c.env.JWT_SECRET, did, did);
+	const refreshJwt = await createRefreshToken(c.env.JWT_SECRET, did, did);
+
+	return c.json({
+		accessJwt,
+		refreshJwt,
+		handle,
+		did,
+		active: true,
+	});
+}
+
+/**
+ * Advance the firehose seq floor past a given value.
+ * Manual debug tool for fixing FutureCursor issues.
+ *
+ * POST /xrpc/is.fid.account.syncRelaySeq
+ * Auth: Bearer token (requireAuth middleware)
+ * Input: { seq: number }
+ * Response: { success: true, newSeq: number }
+ */
+export async function syncRelaySeq(
+	c: Context<AuthedAppEnv>,
+	getAccountDO: GetAccountDO,
+): Promise<Response> {
+	const did: string = c.get("did");
+	const body = await c.req.json<{ seq: number }>().catch(() => null);
+
+	if (!body?.seq || !Number.isInteger(body.seq) || body.seq <= 0) {
+		return c.json(
+			{
+				error: "InvalidRequest",
+				message: "Missing or invalid seq (must be a positive integer)",
+			},
+			400,
+		);
+	}
+
+	const accountDO = getAccountDO(c.env, did);
+	const result = await accountDO.rpcSyncRelaySeq(body.seq);
+
+	return c.json({ success: true, newSeq: result.newSeq });
 }
 
 /**
@@ -420,7 +604,7 @@ export async function deleteAccount(
 	const accountDO = getAccountDO(c.env, did);
 
 	// Verify account exists
-	const exists = await accountDO.rpcHasAtprotoIdentity();
+	const exists = await accountDO.rpcAccountExists();
 	if (!exists) {
 		return c.json(
 			{ error: "AccountNotFound", message: "Account not found" },
@@ -428,8 +612,8 @@ export async function deleteAccount(
 		);
 	}
 
-	// Delete R2 blobs + wipe DO storage
-	await accountDO.rpcDeleteAccount();
+	// Delete account (emits tombstone event, preserves minimal state)
+	await accountDO.rpcDeleteRepo();
 
 	// Delete from D1 user registry (best-effort — table may not exist)
 	if (c.env.USER_REGISTRY) {

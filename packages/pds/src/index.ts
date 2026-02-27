@@ -27,7 +27,8 @@ import { requireAuth } from "./middleware/auth";
 import { DidResolver } from "./did-resolver";
 import { WorkersDidCache } from "./did-cache";
 import { handleXrpcProxy } from "./xrpc-proxy";
-import { createOAuthApp } from "./oauth";
+import { getSigningKeypair } from "./service-auth";
+import { createOAuthApp, getProviderForRequest } from "./oauth";
 import * as sync from "./xrpc/sync";
 import * as repo from "./xrpc/repo";
 import * as server from "./xrpc/server";
@@ -37,6 +38,7 @@ import {
 	hostnameToFid,
 	fidToDid,
 	fidToHandle,
+	fidToPdsHostname,
 } from "./farcaster-auth";
 import type { PDSEnv, AppEnv } from "./types";
 import type { AccountDurableObject } from "./account-do";
@@ -62,17 +64,22 @@ const didResolver = new DidResolver({
 
 const app = new Hono<AppEnv>();
 
-// CORS middleware for all routes
-app.use(
-	"*",
-	cors({
-		origin: "*",
-		allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-		allowHeaders: ["*"],
-		exposeHeaders: ["Content-Type"],
-		maxAge: 86400,
-	}),
-);
+// CORS middleware for all routes (skip WebSocket upgrades — modifying the 101
+// response loses the webSocket property and causes the Workers runtime to 500)
+const corsMiddleware = cors({
+	origin: "*",
+	allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+	allowHeaders: ["*"],
+	exposeHeaders: ["Content-Type"],
+	maxAge: 86400,
+});
+app.use("*", async (c, next) => {
+	if (c.req.header("Upgrade")?.toLowerCase() === "websocket") {
+		await next();
+		return;
+	}
+	return corsMiddleware(c, next);
+});
 
 /**
  * Get Account DO stub using DID-based deterministic routing.
@@ -175,9 +182,13 @@ app.get("/.well-known/did.json", async (c) => {
 		);
 	}
 
-	// Check for custom PDS URL - if set, use it instead of the default
-	const customPdsUrl = await accountDO.rpcGetCustomPdsUrl();
-	const serviceEndpoint = customPdsUrl || `https://${handle}`;
+	// Check for custom PDS URL and verification key
+	const [customPdsUrl, customVerificationKey] = await Promise.all([
+		accountDO.rpcGetCustomPdsUrl(),
+		accountDO.rpcGetCustomVerificationKey(),
+	]);
+	const serviceEndpoint = customPdsUrl || `https://${fidToPdsHostname(fid, domain)}`;
+	const verificationKey = customVerificationKey || publicKey;
 
 	const didDocument = {
 		"@context": [
@@ -192,7 +203,7 @@ app.get("/.well-known/did.json", async (c) => {
 				id: `${did}#atproto`,
 				type: "Multikey",
 				controller: did,
-				publicKeyMultibase: publicKey,
+				publicKeyMultibase: verificationKey,
 			},
 		],
 		service: [
@@ -209,6 +220,31 @@ app.get("/.well-known/did.json", async (c) => {
 // ============================================
 // XRPC Endpoints (served on NNN.fid.is per-user subdomains)
 // ============================================
+
+// DPoP auth middleware — verifies OAuth DPoP tokens and sets `did` in context
+// so that requireAuth (which only handles Bearer JWTs) can use it as a fallback.
+app.use("/xrpc/*", async (c, next) => {
+	// Skip DPoP verification for WebSocket upgrades (firehose is unauthenticated)
+	if (c.req.header("Upgrade")?.toLowerCase() === "websocket") {
+		await next();
+		return;
+	}
+	const auth = c.req.header("Authorization");
+	if (auth?.startsWith("DPoP ")) {
+		try {
+			const provider = getProviderForRequest(c.req.raw, getAccountDO, c.env);
+			if (provider) {
+				const tokenData = await provider.verifyAccessToken(c.req.raw);
+				if (tokenData?.sub) {
+					c.set("did", tokenData.sub);
+				}
+			}
+		} catch {
+			// DPoP verification failed — requireAuth will return 401
+		}
+	}
+	await next();
+});
 
 // Health check
 app.get("/xrpc/_health", (c) => {
@@ -287,14 +323,29 @@ app.post("/xrpc/is.fid.account.delete", requireAuth, (c: any) =>
 	fidAccount.deleteAccount(c, getAccountDO),
 );
 
+// Sync relay seq (requires auth) — manual debug tool
+app.post("/xrpc/is.fid.account.syncRelaySeq", requireAuth, (c: any) =>
+	fidAccount.syncRelaySeq(c, getAccountDO),
+);
+
 // Login with Farcaster auth
 app.post("/xrpc/is.fid.auth.login", (c) =>
 	fidAccount.loginWithFarcaster(c, getAccountDO),
 );
 
-// Login with Sign In With Farcaster (browser-based)
+// Login with Sign In With Farcaster (browser-based) — login only
 app.post("/xrpc/is.fid.auth.siwf", (c) =>
 	fidAccount.loginWithSiwf(c, getAccountDO),
+);
+
+// Check account status by FID (lightweight, always 200)
+app.get("/xrpc/is.fid.account.status", (c) =>
+	fidAccount.getAccountStatus(c, getAccountDO),
+);
+
+// Create account with Sign In With Farcaster (browser-based)
+app.post("/xrpc/is.fid.account.createSiwf", (c) =>
+	fidAccount.createAccountSiwf(c, getAccountDO),
 );
 
 // ============================================
@@ -379,6 +430,20 @@ app.get("/xrpc/com.atproto.sync.getRepo", async (c) => {
 	return sync.getRepo(c as any, getAccountDO(c.env, did));
 });
 
+app.get("/xrpc/com.atproto.sync.getLatestCommit", async (c) => {
+	const did = c.req.query("did");
+	if (!did) {
+		return c.json({ error: "InvalidRequest", message: "Missing did parameter" }, 400);
+	}
+
+	const domain = c.env.WEBFID_DOMAIN;
+	if (!isWebFidDid(did, domain)) {
+		return c.json({ error: "InvalidRequest", message: `Not a ${domain} DID` }, 400);
+	}
+
+	return sync.getLatestCommit(c as any, getAccountDO(c.env, did));
+});
+
 app.get("/xrpc/com.atproto.sync.getRepoStatus", async (c) => {
 	const did = c.req.query("did");
 	if (!did) {
@@ -393,9 +458,80 @@ app.get("/xrpc/com.atproto.sync.getRepoStatus", async (c) => {
 	return sync.getRepoStatus(c as any, getAccountDO(c.env, did));
 });
 
-app.get("/xrpc/com.atproto.sync.listRepos", (c) => {
-	// This would need to enumerate all accounts - not supported in multi-tenant mode
-	return c.json({ repos: [], cursor: undefined });
+app.get("/xrpc/com.atproto.sync.getRecord", async (c) => {
+	const did = c.req.query("did");
+	if (!did) {
+		return c.json({ error: "InvalidRequest", message: "Missing did parameter" }, 400);
+	}
+
+	const domain = c.env.WEBFID_DOMAIN;
+	if (!isWebFidDid(did, domain)) {
+		return c.json({ error: "InvalidRequest", message: `Not a ${domain} DID` }, 400);
+	}
+
+	return sync.getRecord(c as any, getAccountDO(c.env, did));
+});
+
+app.get("/xrpc/com.atproto.sync.getBlob", async (c) => {
+	const did = c.req.query("did");
+	if (!did) {
+		return c.json({ error: "InvalidRequest", message: "Missing did parameter" }, 400);
+	}
+
+	const domain = c.env.WEBFID_DOMAIN;
+	if (!isWebFidDid(did, domain)) {
+		return c.json({ error: "InvalidRequest", message: `Not a ${domain} DID` }, 400);
+	}
+
+	return sync.getBlob(c as any, getAccountDO(c.env, did));
+});
+
+// subscribeRepos WebSocket upgrades are handled before Hono in the default
+// export below. Non-WebSocket requests to this endpoint get a helpful error.
+app.get("/xrpc/com.atproto.sync.subscribeRepos", (c) => {
+	return c.json(
+		{
+			error: "InvalidRequest",
+			message: "This endpoint requires a WebSocket upgrade",
+		},
+		400,
+	);
+});
+
+app.get("/xrpc/com.atproto.sync.listRepos", async (c) => {
+	// Each subdomain hosts exactly one account
+	const hostname = new URL(c.req.url).hostname;
+	const domain = c.env.WEBFID_DOMAIN;
+	const fid = hostnameToFid(hostname, domain);
+	if (!fid) {
+		return c.json({ repos: [] });
+	}
+	const did = fidToDid(fid, domain);
+	const accountDO = getAccountDO(c.env, did);
+	try {
+		const data = await accountDO.rpcGetRepoStatus();
+
+		// Deleted accounts return empty repos list
+		if (data.status === "deleted") {
+			return c.json({ repos: [], active: false, status: "deleted" });
+		}
+
+		const repo: Record<string, unknown> = {
+			did: data.did,
+			head: data.head,
+			active: data.active,
+		};
+		if (data.active) {
+			repo.rev = data.rev;
+		} else {
+			repo.status = data.status;
+		}
+
+		return c.json({ repos: [repo] });
+	} catch {
+		// Account may not exist yet
+		return c.json({ repos: [] });
+	}
 });
 
 // ============================================
@@ -493,6 +629,64 @@ app.post("/xrpc/gg.mk.experimental.resetMigration", requireAuth, (c: any) =>
 	server.resetMigration(c, getAccountDO(c.env, c.get("did"))),
 );
 app.post(
+	"/xrpc/gg.mk.experimental.emitIdentityEvent",
+	requireAuth,
+	async (c: any) => {
+		const did = c.get("did") as string;
+		const accountDO = getAccountDO(c.env, did);
+		const identity = await accountDO.rpcGetAtprotoIdentity();
+		if (!identity) {
+			return c.json(
+				{ error: "AccountNotFound", message: "Account not found" },
+				404,
+			);
+		}
+		const result = await accountDO.rpcEmitIdentityEvent(identity.handle);
+		return c.json(result);
+	},
+);
+app.post(
+	"/xrpc/gg.mk.experimental.emitAccountEvent",
+	requireAuth,
+	async (c: any) => {
+		const did = c.get("did") as string;
+		const accountDO = getAccountDO(c.env, did);
+		const repoStatus = await accountDO.rpcGetRepoStatus();
+		const active = repoStatus.active;
+		const status = active ? undefined : repoStatus.status;
+		// Emit #account event reflecting current repo status
+		await accountDO.rpcEmitAccountEvent(active, status);
+		return c.json({ success: true, active, status: status ?? "active" });
+	},
+);
+app.get(
+	"/xrpc/gg.mk.experimental.getFirehoseStatus",
+	requireAuth,
+	async (c: any) => {
+		const did = c.get("did") as string;
+		const accountDO = getAccountDO(c.env, did);
+		const result = await accountDO.rpcGetFirehoseStatus();
+		return c.json(result);
+	},
+);
+app.post(
+	"/xrpc/gg.mk.experimental.setRepoStatus",
+	requireAuth,
+	async (c: any) => {
+		const did = c.get("did") as string;
+		const body = (await c.req.json().catch(() => null)) as { status: string } | null;
+		if (!body?.status || !["active", "deactivated", "deleted"].includes(body.status)) {
+			return c.json(
+				{ error: "InvalidRequest", message: "status must be active, deactivated, or deleted" },
+				400,
+			);
+		}
+		const accountDO = getAccountDO(c.env, did);
+		await accountDO.rpcSetRepoStatus(body.status);
+		return c.json({ success: true, status: body.status });
+	},
+);
+app.post(
 	"/xrpc/com.atproto.server.requestEmailUpdate",
 	requireAuth,
 	server.requestEmailUpdate,
@@ -536,25 +730,53 @@ app.get("/xrpc/com.atproto.server.getServiceAuth", requireAuth, (c: any) =>
 // ============================================
 
 app.all("/xrpc/*", async (c) => {
-	// For proxy, we need to create a service JWT
-	// In multi-tenant mode, we'd need to get the keypair from the authenticated user's DO
-	// For now, proxy without service auth for public endpoints
-	const auth = c.req.header("Authorization");
-	if (!auth) {
-		// No auth, just proxy as-is
-		return handleXrpcProxy(c as any, didResolver, async () => {
-			throw new Error("No keypair available for unauthenticated requests");
-		}, getAccountDO);
-	}
-
-	// TODO: For authenticated proxy requests, we'd need to:
-	// 1. Verify the token and get the DID
-	// 2. Load the keypair from that user's DO
-	// 3. Create service JWT with their identity
-	// For now, this is a limitation of the multi-tenant architecture
-	return handleXrpcProxy(c as any, didResolver, async () => {
-		throw new Error("Authenticated proxy not yet implemented");
-	}, getAccountDO);
+	return handleXrpcProxy(c as any, didResolver, async (userDid: string) => {
+		const accountDO = getAccountDO(c.env, userDid);
+		const identity = await accountDO.rpcGetAtprotoIdentity();
+		if (!identity?.signingKey) {
+			throw new Error("No signing key found for user");
+		}
+		return getSigningKeypair(identity.signingKey);
+	}, getAccountDO, c.get("did"));
 });
 
-export default app;
+// Export a custom worker that intercepts WebSocket upgrades before Hono.
+// Hono wraps Response objects in its middleware pipeline, which strips the
+// non-standard `webSocket` property from 101 responses. This causes Cloudflare
+// Workers to return a 500 instead of completing the WebSocket handshake.
+export default {
+	async fetch(
+		request: Request,
+		workerEnv: PDSEnv,
+		ctx: ExecutionContext,
+	): Promise<Response> {
+		// Handle WebSocket upgrades directly, bypassing Hono
+		if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
+			const url = new URL(request.url);
+			if (
+				url.pathname === "/xrpc/com.atproto.sync.subscribeRepos"
+			) {
+				const domain = workerEnv.WEBFID_DOMAIN;
+				const fid = hostnameToFid(url.hostname, domain);
+				if (!fid) {
+					return new Response(
+						JSON.stringify({
+							error: "InvalidRequest",
+							message: "Invalid hostname",
+						}),
+						{ status: 400, headers: { "Content-Type": "application/json" } },
+					);
+				}
+				const did = fidToDid(fid, domain);
+				const accountDO = getAccountDO(workerEnv, did);
+
+				// Always forward to the DO — it handles tombstone responses
+				// for deleted accounts (sends #account event then closes)
+				return accountDO.fetch(request);
+			}
+		}
+
+		// Everything else goes through Hono
+		return app.fetch(request, workerEnv, ctx);
+	},
+};

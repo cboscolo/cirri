@@ -1,9 +1,23 @@
 import { describe, it, expect } from "vitest";
 import { CarReader } from "@ipld/car";
 import { decodeAll } from "@atproto/lex-cbor";
-import { env, worker, runInDurableObject } from "./helpers";
+import {
+	env,
+	worker,
+	runInDurableObject,
+	getTestAccountStub,
+	seedIdentity,
+	testUrl,
+	TEST_DID,
+	TEST_HANDLE,
+	TEST_SIGNING_KEY,
+	TEST_SIGNING_KEY_PUBLIC,
+} from "./helpers";
 import type { AccountDurableObject } from "../src/account-do";
-import type { SeqCommitEvent, SeqIdentityEvent } from "../src/sequencer";
+import type {
+	SeqCommitEvent,
+	SeqIdentityEvent,
+} from "../src/sequencer";
 
 /**
  * Decode a firehose frame into header and body.
@@ -17,12 +31,11 @@ function decodeFrame(frame: Uint8Array): { header: unknown; body: unknown } {
 	return { header: decoded[0], body: decoded[1] };
 }
 
-// TODO: Rewrite tests to use Farcaster Quick Auth (fid.is.auth.login) instead of legacy AUTH_TOKEN
-describe.skip("Firehose (subscribeRepos)", () => {
+describe("Firehose (subscribeRepos)", () => {
 	describe("WebSocket Upgrade", () => {
 		it("should reject non-WebSocket requests", async () => {
 			const response = await worker.fetch(
-				new Request("http://pds.test/xrpc/com.atproto.sync.subscribeRepos"),
+				new Request(testUrl("/xrpc/com.atproto.sync.subscribeRepos")),
 				env,
 			);
 
@@ -36,42 +49,34 @@ describe.skip("Firehose (subscribeRepos)", () => {
 
 	describe("Event Sequencing", () => {
 		it("should sequence createRecord events", async () => {
-			const id = env.ACCOUNT.idFromName("account");
-			const stub = env.ACCOUNT.get(id);
+			const stub = getTestAccountStub();
 
 			await runInDurableObject(stub, async (instance: AccountDurableObject) => {
-				// Ensure storage is initialized
-				await instance.getStorage();
-				const sequencer: Exclude<AccountDurableObject["sequencer"], null> = (
-					instance as any
-				).sequencer;
+				await seedIdentity(instance);
+				const sequencer = (instance as any).sequencer;
 
-				// Get current seq
 				const seqBefore = sequencer.getLatestSeq();
 
-				// Create a record
 				await instance.rpcCreateRecord("app.bsky.feed.post", "test-seq-123", {
 					text: "Test sequencing",
 					createdAt: new Date().toISOString(),
 				});
 
-				// Check that event was sequenced
 				const seqAfter = sequencer.getLatestSeq();
 				expect(seqAfter).toBeGreaterThan(seqBefore);
 
-				// Verify event can be retrieved
 				const events = await sequencer.getEventsSince(seqBefore, 10);
 				expect(events.length).toBeGreaterThan(0);
 
-				const newEvent = events.find((e) =>
-					e.event.ops.some(
-						(op) => op.path === "app.bsky.feed.post/test-seq-123",
+				const newEvent = events.find((e: any) =>
+					e.event.ops?.some(
+						(op: any) => op.path === "app.bsky.feed.post/test-seq-123",
 					),
 				);
 				expect(newEvent).toBeDefined();
 				if (newEvent) {
 					expect(newEvent.type).toBe("commit");
-					expect(newEvent.event.repo).toBe(env.DID);
+					expect(newEvent.event.repo).toBe(TEST_DID);
 					expect(newEvent.event.ops).toHaveLength(1);
 					expect(newEvent.event.ops[0]?.action).toBe("create");
 				}
@@ -79,15 +84,12 @@ describe.skip("Firehose (subscribeRepos)", () => {
 		});
 
 		it("should sequence deleteRecord events", async () => {
-			const id = env.ACCOUNT.idFromName("account");
-			const stub = env.ACCOUNT.get(id);
+			const stub = getTestAccountStub();
 
 			await runInDurableObject(stub, async (instance: AccountDurableObject) => {
-				// Ensure storage is initialized
-				await instance.getStorage();
+				await seedIdentity(instance);
 				const sequencer = (instance as any).sequencer;
 
-				// Create a record first
 				await instance.rpcCreateRecord("app.bsky.feed.post", "to-delete-seq", {
 					text: "Will be deleted",
 					createdAt: new Date().toISOString(),
@@ -95,20 +97,17 @@ describe.skip("Firehose (subscribeRepos)", () => {
 
 				const seqBeforeDelete = sequencer.getLatestSeq();
 
-				// Delete it
 				await instance.rpcDeleteRecord("app.bsky.feed.post", "to-delete-seq");
 
-				// Check that delete was sequenced
 				const seqAfterDelete = sequencer.getLatestSeq();
 				expect(seqAfterDelete).toBeGreaterThan(seqBeforeDelete);
 
-				// Verify delete event
 				const events = await sequencer.getEventsSince(seqBeforeDelete, 10);
 				expect(events.length).toBeGreaterThan(0);
 
 				const deleteEvent = events[events.length - 1];
 				expect(deleteEvent).toBeDefined();
-				if (deleteEvent) {
+				if (deleteEvent && deleteEvent.type === "commit") {
 					expect(deleteEvent.event.ops).toHaveLength(1);
 					expect(deleteEvent.event.ops[0]?.action).toBe("delete");
 					expect(deleteEvent.event.ops[0]?.path).toBe(
@@ -121,17 +120,14 @@ describe.skip("Firehose (subscribeRepos)", () => {
 
 	describe("Cursor Validation", () => {
 		it("should handle backfill from cursor", async () => {
-			const id = env.ACCOUNT.idFromName("account");
-			const stub = env.ACCOUNT.get(id);
+			const stub = getTestAccountStub();
 
 			await runInDurableObject(stub, async (instance: AccountDurableObject) => {
-				// Ensure storage is initialized
-				await instance.getStorage();
+				await seedIdentity(instance);
 				const sequencer = (instance as any).sequencer;
 
 				const seqBefore = sequencer.getLatestSeq();
 
-				// Create some events
 				for (let i = 0; i < 3; i++) {
 					await instance.rpcCreateRecord(
 						"app.bsky.feed.post",
@@ -143,7 +139,6 @@ describe.skip("Firehose (subscribeRepos)", () => {
 					);
 				}
 
-				// Get events since the cursor
 				const events = await sequencer.getEventsSince(seqBefore, 10);
 				expect(events.length).toBe(3);
 			});
@@ -152,16 +147,14 @@ describe.skip("Firehose (subscribeRepos)", () => {
 
 	describe("Event Blocks", () => {
 		it("should include CAR blocks with record data in events", async () => {
-			const id = env.ACCOUNT.idFromName("account");
-			const stub = env.ACCOUNT.get(id);
+			const stub = getTestAccountStub();
 
 			await runInDurableObject(stub, async (instance: AccountDurableObject) => {
-				await instance.getStorage();
+				await seedIdentity(instance);
 				const sequencer = (instance as any).sequencer;
 
 				const seqBefore = sequencer.getLatestSeq();
 
-				// Create a record
 				const result = await instance.rpcCreateRecord(
 					"app.bsky.feed.post",
 					"blocks-test-123",
@@ -172,10 +165,9 @@ describe.skip("Firehose (subscribeRepos)", () => {
 					},
 				);
 
-				// Get the event
 				const events = await sequencer.getEventsSince(seqBefore, 10);
 				const event = events.find((e: any) =>
-					e.event.ops.some(
+					e.event.ops?.some(
 						(op: any) => op.path === "app.bsky.feed.post/blocks-test-123",
 					),
 				);
@@ -184,16 +176,13 @@ describe.skip("Firehose (subscribeRepos)", () => {
 				expect(event!.event.blocks).toBeInstanceOf(Uint8Array);
 				expect(event!.event.blocks.length).toBeGreaterThan(0);
 
-				// Verify blocks can be parsed as CAR
 				const reader = await CarReader.fromBytes(event!.event.blocks);
 				const roots = await reader.getRoots();
 				expect(roots.length).toBe(1);
 
-				// Verify we can get the commit block
 				const commitBlock = await reader.get(roots[0]!);
 				expect(commitBlock).toBeDefined();
 
-				// Verify record CID is in the blocks
 				const recordCidStr = result.cid;
 				let foundRecord = false;
 				for await (const block of reader.blocks()) {
@@ -207,16 +196,14 @@ describe.skip("Firehose (subscribeRepos)", () => {
 		});
 
 		it("should not have empty blocks in events", async () => {
-			const id = env.ACCOUNT.idFromName("account");
-			const stub = env.ACCOUNT.get(id);
+			const stub = getTestAccountStub();
 
 			await runInDurableObject(stub, async (instance: AccountDurableObject) => {
-				await instance.getStorage();
+				await seedIdentity(instance);
 				const sequencer = (instance as any).sequencer;
 
 				const seqBefore = sequencer.getLatestSeq();
 
-				// Create a record
 				await instance.rpcCreateRecord("app.bsky.feed.post", "non-empty-test", {
 					$type: "app.bsky.feed.post",
 					text: "Must have blocks",
@@ -226,9 +213,10 @@ describe.skip("Firehose (subscribeRepos)", () => {
 				const events = await sequencer.getEventsSince(seqBefore, 10);
 				expect(events.length).toBeGreaterThan(0);
 
-				// All events should have non-empty blocks
 				for (const event of events) {
-					expect(event.event.blocks.length).toBeGreaterThan(50);
+					if (event.type === "commit") {
+						expect(event.event.blocks.length).toBeGreaterThan(50);
+					}
 				}
 			});
 		});
@@ -236,18 +224,14 @@ describe.skip("Firehose (subscribeRepos)", () => {
 
 	describe("Event Retrieval", () => {
 		it("should retrieve events since cursor", async () => {
-			const id = env.ACCOUNT.idFromName("account");
-			const stub = env.ACCOUNT.get(id);
+			const stub = getTestAccountStub();
 
 			await runInDurableObject(stub, async (instance: AccountDurableObject) => {
-				// Ensure storage is initialized
-				await instance.getStorage();
+				await seedIdentity(instance);
 				const sequencer = (instance as any).sequencer;
 
-				// Get current seq
 				const currentSeq = sequencer.getLatestSeq();
 
-				// Create 3 new records
 				for (let i = 0; i < 3; i++) {
 					await instance.rpcCreateRecord(
 						"app.bsky.feed.post",
@@ -259,30 +243,27 @@ describe.skip("Firehose (subscribeRepos)", () => {
 					);
 				}
 
-				// Get events since the old cursor
 				const events = await sequencer.getEventsSince(currentSeq, 10);
 				expect(events.length).toBe(3);
 
-				// Verify all are commit events
 				for (const event of events) {
 					expect(event.type).toBe("commit");
-					expect(event.event.repo).toBe(env.DID);
+					if (event.type === "commit") {
+						expect(event.event.repo).toBe(TEST_DID);
+					}
 				}
 			});
 		});
 
 		it("should respect limit parameter", async () => {
-			const id = env.ACCOUNT.idFromName("account");
-			const stub = env.ACCOUNT.get(id);
+			const stub = getTestAccountStub();
 
 			await runInDurableObject(stub, async (instance: AccountDurableObject) => {
-				// Ensure storage is initialized
-				await instance.getStorage();
+				await seedIdentity(instance);
 				const sequencer = (instance as any).sequencer;
 
 				const currentSeq = sequencer.getLatestSeq();
 
-				// Create 10 records
 				for (let i = 0; i < 10; i++) {
 					await instance.rpcCreateRecord(
 						"app.bsky.feed.post",
@@ -294,7 +275,6 @@ describe.skip("Firehose (subscribeRepos)", () => {
 					);
 				}
 
-				// Request only 5 events
 				const events = await sequencer.getEventsSince(currentSeq, 5);
 				expect(events.length).toBe(5);
 			});
@@ -303,11 +283,10 @@ describe.skip("Firehose (subscribeRepos)", () => {
 
 	describe("Frame Encoding", () => {
 		it("should encode commit events with #commit frame type", async () => {
-			const id = env.ACCOUNT.idFromName("account");
-			const stub = env.ACCOUNT.get(id);
+			const stub = getTestAccountStub();
 
 			await runInDurableObject(stub, async (instance: AccountDurableObject) => {
-				await instance.getStorage();
+				await seedIdentity(instance);
 				const sequencer = (instance as any).sequencer;
 				const encodeEventFrame = (instance as any).encodeEventFrame.bind(
 					instance,
@@ -315,7 +294,6 @@ describe.skip("Firehose (subscribeRepos)", () => {
 
 				const seqBefore = sequencer.getLatestSeq();
 
-				// Create a record to get a commit event
 				await instance.rpcCreateRecord(
 					"app.bsky.feed.post",
 					"frame-type-test",
@@ -325,12 +303,10 @@ describe.skip("Firehose (subscribeRepos)", () => {
 					},
 				);
 
-				// Get the event
 				const events = await sequencer.getEventsSince(seqBefore, 1);
 				expect(events.length).toBe(1);
 				expect(events[0].type).toBe("commit");
 
-				// Encode the event and verify frame header
 				const frame = encodeEventFrame(events[0] as SeqCommitEvent);
 				const { header, body } = decodeFrame(frame);
 
@@ -339,35 +315,32 @@ describe.skip("Firehose (subscribeRepos)", () => {
 					t: "#commit",
 				});
 				expect(body).toMatchObject({
-					repo: env.DID,
+					repo: TEST_DID,
 				});
 			});
 		});
 
 		it("should encode identity events with #identity frame type", async () => {
-			const id = env.ACCOUNT.idFromName("account");
-			const stub = env.ACCOUNT.get(id);
+			const stub = getTestAccountStub();
 
 			await runInDurableObject(stub, async (instance: AccountDurableObject) => {
-				await instance.getStorage();
+				await seedIdentity(instance);
 				const encodeEventFrame = (instance as any).encodeEventFrame.bind(
 					instance,
 				);
 
-				// Create a mock identity event to test encoding
 				const identityEvent: SeqIdentityEvent = {
 					seq: 1,
 					type: "identity",
 					event: {
 						seq: 1,
-						did: env.DID,
-						handle: env.HANDLE,
+						did: TEST_DID,
+						handle: TEST_HANDLE,
 						time: new Date().toISOString(),
 					},
 					time: new Date().toISOString(),
 				};
 
-				// Encode and verify frame header uses #identity
 				const frame = encodeEventFrame(identityEvent);
 				const { header, body } = decodeFrame(frame);
 
@@ -376,18 +349,17 @@ describe.skip("Firehose (subscribeRepos)", () => {
 					t: "#identity",
 				});
 				expect(body).toMatchObject({
-					did: env.DID,
-					handle: env.HANDLE,
+					did: TEST_DID,
+					handle: TEST_HANDLE,
 				});
 			});
 		});
 
 		it("should dispatch to correct encoder based on event type", async () => {
-			const id = env.ACCOUNT.idFromName("account");
-			const stub = env.ACCOUNT.get(id);
+			const stub = getTestAccountStub();
 
 			await runInDurableObject(stub, async (instance: AccountDurableObject) => {
-				await instance.getStorage();
+				await seedIdentity(instance);
 				const encodeEventFrame = (instance as any).encodeEventFrame.bind(
 					instance,
 				);
@@ -395,7 +367,6 @@ describe.skip("Firehose (subscribeRepos)", () => {
 
 				const seqBefore = sequencer.getLatestSeq();
 
-				// Create a record
 				await instance.rpcCreateRecord(
 					"app.bsky.feed.post",
 					"dispatch-test",
@@ -413,18 +384,17 @@ describe.skip("Firehose (subscribeRepos)", () => {
 				const commitDecoded = decodeFrame(commitFrame);
 				expect((commitDecoded.header as any).t).toBe("#commit");
 
-				// Create identity event and verify it gets #identity header
+				// Verify identity event gets #identity header
 				const identityEvent: SeqIdentityEvent = {
 					...commitEvent,
 					type: "identity",
 					event: {
 						seq: commitEvent.seq,
-						did: env.DID,
-						handle: env.HANDLE,
+						did: TEST_DID,
+						handle: TEST_HANDLE,
 						time: new Date().toISOString(),
 					},
 				};
-
 				const identityFrame = encodeEventFrame(identityEvent);
 				const identityDecoded = decodeFrame(identityFrame);
 				expect((identityDecoded.header as any).t).toBe("#identity");
@@ -434,18 +404,137 @@ describe.skip("Firehose (subscribeRepos)", () => {
 
 	describe("Identity Events", () => {
 		it("should emit identity events with correct frame format", async () => {
-			const id = env.ACCOUNT.idFromName("account");
-			const stub = env.ACCOUNT.get(id);
+			const stub = getTestAccountStub();
 
 			await runInDurableObject(stub, async (instance: AccountDurableObject) => {
-				await instance.getStorage();
+				await seedIdentity(instance);
 
-				// Emit an identity event
-				const result = await instance.rpcEmitIdentityEvent(env.HANDLE);
+				const result = await instance.rpcEmitIdentityEvent(TEST_HANDLE);
 
 				expect(result).toHaveProperty("seq");
 				expect(typeof result.seq).toBe("number");
 				expect(result.seq).toBeGreaterThan(0);
+			});
+		});
+	});
+
+	describe("Account Deletion Tombstone", () => {
+		it("should return 410 for deleted account firehose", async () => {
+			// Use a unique FID to avoid conflicts with other tests
+			const did = `did:web:77777.${env.WEBFID_DOMAIN}`;
+			const handle = `77777.${env.WEBFID_DOMAIN}`;
+			const id = env.ACCOUNT.idFromName(did);
+			const stub = env.ACCOUNT.get(id);
+
+			await runInDurableObject(stub, async (instance: AccountDurableObject) => {
+				// Seed and delete
+				await instance.rpcSetAtprotoIdentity({
+					did,
+					handle,
+					signingKey: TEST_SIGNING_KEY,
+					signingKeyPublic: TEST_SIGNING_KEY_PUBLIC,
+				});
+				await instance.rpcDeleteRepo();
+
+				// Verify account identity still exists but repo is deleted
+				expect(await instance.rpcAccountExists()).toBe(true);
+				expect(await instance.rpcHasAtprotoIdentity()).toBe(true);
+				expect(await instance.rpcGetAccountStatus()).toBe("deleted");
+
+				// Call handleFirehoseUpgrade directly
+				const request = new Request(
+					`http://${handle}/xrpc/com.atproto.sync.subscribeRepos`,
+					{ headers: { Upgrade: "websocket" } },
+				);
+				const response = await (instance as any).handleFirehoseUpgrade(request);
+
+				// Should return 410 Gone
+				expect(response.status).toBe(410);
+				const body = await response.json();
+				expect(body.error).toBe("AccountNotFound");
+			});
+		});
+
+		it("should return repo status for deleted account without error", async () => {
+			const did = `did:web:99999.${env.WEBFID_DOMAIN}`;
+			const handle = `99999.${env.WEBFID_DOMAIN}`;
+			const id = env.ACCOUNT.idFromName(did);
+			const stub = env.ACCOUNT.get(id);
+
+			await runInDurableObject(stub, async (instance: AccountDurableObject) => {
+				// Seed identity and create a record so repo is initialized
+				await instance.rpcSetAtprotoIdentity({
+					did,
+					handle,
+					signingKey: TEST_SIGNING_KEY,
+					signingKeyPublic: TEST_SIGNING_KEY_PUBLIC,
+				});
+				await instance.rpcCreateRecord("app.bsky.feed.post", "test-post", {
+					text: "test",
+					createdAt: new Date().toISOString(),
+				});
+
+				// Verify repo status works before deletion
+				const statusBefore = await instance.rpcGetRepoStatus();
+				expect(statusBefore.did).toBe(did);
+				expect(statusBefore.active).toBe(true);
+				expect(statusBefore.head).toBeTruthy();
+				expect(statusBefore.rev).toBeTruthy();
+
+				// Delete the account
+				await instance.rpcDeleteRepo();
+
+				// Repo status should still work — returns deleted state
+				const statusAfter = await instance.rpcGetRepoStatus();
+				expect(statusAfter.did).toBe(did);
+				expect(statusAfter.active).toBe(false);
+				expect(statusAfter.status).toBe("deleted");
+				expect(statusAfter.head).toBe("");
+				expect(statusAfter.rev).toBe("");
+			});
+		});
+
+		it("should return repo status for legacy-deleted account (no identity)", async () => {
+			// Simulate an account deleted with the old deleteAll() approach
+			// where atproto_identity table is empty
+			const did = `did:web:66666.${env.WEBFID_DOMAIN}`;
+			const id = env.ACCOUNT.idFromName(did);
+			const stub = env.ACCOUNT.get(id);
+
+			await runInDurableObject(stub, async (instance: AccountDurableObject) => {
+				// Don't seed identity — simulates post-deleteAll state
+				// where initSchema recreated empty tables
+				const status = await instance.rpcGetRepoStatus();
+				expect(status.active).toBe(false);
+				expect(status.status).toBe("deleted");
+				expect(status.head).toBe("");
+				expect(status.rev).toBe("");
+			});
+		});
+
+		it("should preserve identity after tombstone-preserving deletion", async () => {
+			const did = `did:web:88888.${env.WEBFID_DOMAIN}`;
+			const handle = `88888.${env.WEBFID_DOMAIN}`;
+			const id = env.ACCOUNT.idFromName(did);
+			const stub = env.ACCOUNT.get(id);
+
+			await runInDurableObject(stub, async (instance: AccountDurableObject) => {
+				await instance.rpcSetAtprotoIdentity({
+					did,
+					handle,
+					signingKey: TEST_SIGNING_KEY,
+					signingKeyPublic: TEST_SIGNING_KEY_PUBLIC,
+				});
+
+				await instance.rpcDeleteRepo();
+
+				// Identity row preserved (for DID tombstone)
+				expect(await instance.rpcHasAtprotoIdentity()).toBe(true);
+				// Public key cleared
+				const pubKey = await instance.rpcGetAtprotoPublicKey();
+				expect(pubKey).toBe("");
+				// Status is deleted
+				expect(await instance.rpcGetAccountStatus()).toBe("deleted");
 			});
 		});
 	});

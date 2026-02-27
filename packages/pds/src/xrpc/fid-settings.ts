@@ -19,6 +19,8 @@ export interface PdsUrlResponse {
 	pdsUrl: string | null;
 	isCustom: boolean;
 	defaultUrl: string;
+	verificationKey: string | null;
+	defaultVerificationKey: string;
 }
 
 /**
@@ -47,13 +49,18 @@ export async function getPdsUrl(
 		);
 	}
 
-	const customPdsUrl = await accountDO.rpcGetCustomPdsUrl();
-	const defaultUrl = `https://${identity.handle}`;
+	const [customPdsUrl, customVerificationKey] = await Promise.all([
+		accountDO.rpcGetCustomPdsUrl(),
+		accountDO.rpcGetCustomVerificationKey(),
+	]);
+	const defaultUrl = `https://pds-${identity.handle}`;
 
 	return c.json({
 		pdsUrl: customPdsUrl || defaultUrl,
 		isCustom: customPdsUrl !== null,
 		defaultUrl,
+		verificationKey: customVerificationKey,
+		defaultVerificationKey: identity.signingKeyPublic,
 	} satisfies PdsUrlResponse);
 }
 
@@ -83,7 +90,7 @@ export async function setPdsUrl(
 	accountDO: DurableObjectStub<AccountDurableObject>,
 ): Promise<Response> {
 	const body = await c.req
-		.json<{ pdsUrl: string | null }>()
+		.json<{ pdsUrl: string | null; verificationKey?: string | null }>()
 		.catch(() => null);
 
 	if (body === null || !("pdsUrl" in body)) {
@@ -96,7 +103,7 @@ export async function setPdsUrl(
 		);
 	}
 
-	const { pdsUrl } = body;
+	const { pdsUrl, verificationKey } = body;
 
 	// Validate URL if provided
 	if (pdsUrl !== null) {
@@ -131,8 +138,28 @@ export async function setPdsUrl(
 		);
 	}
 
+	// Validate verification key if provided
+	if (verificationKey !== undefined && verificationKey !== null) {
+		if (!verificationKey.startsWith("z") || verificationKey.length < 2) {
+			return c.json(
+				{
+					error: "InvalidRequest",
+					message: "Verification key must be a multibase base58btc string (starting with 'z')",
+				},
+				400,
+			);
+		}
+	}
+
 	try {
 		await accountDO.rpcSetCustomPdsUrl(pdsUrl);
+
+		// When resetting PDS URL to default, also clear custom verification key
+		if (pdsUrl === null) {
+			await accountDO.rpcSetCustomVerificationKey(null);
+		} else if (verificationKey !== undefined) {
+			await accountDO.rpcSetCustomVerificationKey(verificationKey);
+		}
 	} catch (err) {
 		return c.json(
 			{
@@ -144,7 +171,7 @@ export async function setPdsUrl(
 		);
 	}
 
-	const defaultUrl = `https://${identity.handle}`;
+	const defaultUrl = `https://pds-${identity.handle}`;
 
 	return c.json({
 		success: true,

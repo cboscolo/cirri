@@ -167,6 +167,11 @@ export class Sequencer {
 			const seq = row.seq as number;
 			const time = row.created_at as string;
 
+			// Skip noop placeholders inserted by setSeqFloor
+			if (eventType === "noop") {
+				continue;
+			}
+
 			if (eventType === "identity") {
 				// Skip legacy identity events with empty payload
 				if (payload.length === 0) {
@@ -204,6 +209,27 @@ export class Sequencer {
 			.exec("SELECT MAX(seq) as seq FROM firehose_events")
 			.one();
 		return (result?.seq as number) ?? 0;
+	}
+
+	/**
+	 * Advance the AUTOINCREMENT counter so the next event gets a seq > floor.
+	 * Used manually to fix FutureCursor issues when a relay's cursor is ahead
+	 * of the PDS seq (e.g. after account deletion/recreation).
+	 * No-op if the current seq is already >= floor.
+	 */
+	setSeqFloor(floor: number): void {
+		const current = this.getLatestSeq();
+		if (current >= floor) return;
+
+		// Insert a placeholder row at the desired seq.
+		// This advances SQLite's AUTOINCREMENT counter so the next real event
+		// gets seq > floor. The noop row is kept so getLatestSeq() reflects
+		// the new floor (it queries MAX(seq) from firehose_events).
+		// The noop event_type is skipped by getEventsSince during backfill.
+		this.sql.exec(
+			`INSERT INTO firehose_events (seq, event_type, payload) VALUES (?, 'noop', X'00')`,
+			floor,
+		);
 	}
 
 	/**

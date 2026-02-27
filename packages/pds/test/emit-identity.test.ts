@@ -1,24 +1,20 @@
-import { describe, it, expect, afterEach } from "vitest";
-import { env, worker } from "./helpers";
+import { describe, it, expect } from "vitest";
+import {
+	env,
+	worker,
+	runInDurableObject,
+	getTestAccountStub,
+	seedIdentity,
+	createTestAccessToken,
+	testUrl,
+	TEST_DID,
+} from "./helpers";
+import type { AccountDurableObject } from "../src/account-do";
 
-// TODO: Rewrite tests to use Farcaster Quick Auth (fid.is.auth.login) instead of legacy AUTH_TOKEN
-describe.skip("gg.mk.experimental.emitIdentityEvent", () => {
-	// Ensure account is activated after each test to prevent state leakage
-	afterEach(async () => {
-		await worker.fetch(
-			new Request(`http://pds.test/xrpc/com.atproto.server.activateAccount`, {
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${env.AUTH_TOKEN}`,
-				},
-			}),
-			env,
-		);
-	});
-
+describe("gg.mk.experimental.emitIdentityEvent", () => {
 	it("requires authentication", async () => {
 		const response = await worker.fetch(
-			new Request(`http://pds.test/xrpc/gg.mk.experimental.emitIdentityEvent`, {
+			new Request(testUrl("/xrpc/gg.mk.experimental.emitIdentityEvent"), {
 				method: "POST",
 			}),
 			env,
@@ -30,16 +26,24 @@ describe.skip("gg.mk.experimental.emitIdentityEvent", () => {
 	});
 
 	it("emits identity event with sequence number", async () => {
-		// Create a record to ensure the account has data
+		// Seed the account identity first via DO RPC
+		const stub = getTestAccountStub();
+		await runInDurableObject(stub, async (instance: AccountDurableObject) => {
+			await seedIdentity(instance);
+		});
+
+		// Create a record so the account has data
+		const accessToken = await createTestAccessToken();
+
 		await worker.fetch(
-			new Request(`http://pds.test/xrpc/com.atproto.repo.createRecord`, {
+			new Request(testUrl("/xrpc/com.atproto.repo.createRecord"), {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
-					Authorization: `Bearer ${env.AUTH_TOKEN}`,
+					Authorization: `Bearer ${accessToken}`,
 				},
 				body: JSON.stringify({
-					repo: env.DID,
+					repo: TEST_DID,
 					collection: "app.bsky.feed.post",
 					record: {
 						$type: "app.bsky.feed.post",
@@ -52,10 +56,10 @@ describe.skip("gg.mk.experimental.emitIdentityEvent", () => {
 		);
 
 		const response = await worker.fetch(
-			new Request(`http://pds.test/xrpc/gg.mk.experimental.emitIdentityEvent`, {
+			new Request(testUrl("/xrpc/gg.mk.experimental.emitIdentityEvent"), {
 				method: "POST",
 				headers: {
-					Authorization: `Bearer ${env.AUTH_TOKEN}`,
+					Authorization: `Bearer ${accessToken}`,
 				},
 			}),
 			env,
@@ -67,13 +71,20 @@ describe.skip("gg.mk.experimental.emitIdentityEvent", () => {
 		expect(body.seq).toBeGreaterThan(0);
 	});
 
-	it("can be called multiple times", async () => {
-		// First call
+	it("can be called multiple times with increasing seq", async () => {
+		// Seed the account identity first
+		const stub = getTestAccountStub();
+		await runInDurableObject(stub, async (instance: AccountDurableObject) => {
+			await seedIdentity(instance);
+		});
+
+		const accessToken = await createTestAccessToken();
+
 		const response1 = await worker.fetch(
-			new Request(`http://pds.test/xrpc/gg.mk.experimental.emitIdentityEvent`, {
+			new Request(testUrl("/xrpc/gg.mk.experimental.emitIdentityEvent"), {
 				method: "POST",
 				headers: {
-					Authorization: `Bearer ${env.AUTH_TOKEN}`,
+					Authorization: `Bearer ${accessToken}`,
 				},
 			}),
 			env,
@@ -82,12 +93,11 @@ describe.skip("gg.mk.experimental.emitIdentityEvent", () => {
 		expect(response1.status).toBe(200);
 		const body1 = (await response1.json()) as { seq: number };
 
-		// Second call - should get a higher sequence number
 		const response2 = await worker.fetch(
-			new Request(`http://pds.test/xrpc/gg.mk.experimental.emitIdentityEvent`, {
+			new Request(testUrl("/xrpc/gg.mk.experimental.emitIdentityEvent"), {
 				method: "POST",
 				headers: {
-					Authorization: `Bearer ${env.AUTH_TOKEN}`,
+					Authorization: `Bearer ${accessToken}`,
 				},
 			}),
 			env,

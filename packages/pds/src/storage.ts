@@ -37,13 +37,13 @@ export class SqliteRepoStorage
 				root_cid TEXT,
 				rev TEXT,
 				seq INTEGER NOT NULL DEFAULT 0,
-				active INTEGER NOT NULL DEFAULT 1,
+				status TEXT NOT NULL DEFAULT 'active',
 				email TEXT
 			);
 
 			-- Initialize with empty state if not exists
-			INSERT OR IGNORE INTO repo_state (id, root_cid, rev, seq, active)
-			VALUES (1, NULL, NULL, 0, ${initialActive ? 1 : 0});
+			INSERT OR IGNORE INTO repo_state (id, root_cid, rev, seq, status)
+			VALUES (1, NULL, NULL, 0, '${initialActive ? "active" : "deactivated"}');
 
 			-- Firehose events (sequenced commit log)
 			CREATE TABLE IF NOT EXISTS firehose_events (
@@ -132,6 +132,17 @@ export class SqliteRepoStorage
 		} catch {
 			// Column already exists, ignore
 		}
+
+		// Migration: Add custom_verification_key column if it doesn't exist
+		// This allows users to advertise a different signing key in their DID document
+		try {
+			this.sql.exec(
+				"ALTER TABLE atproto_identity ADD COLUMN custom_verification_key TEXT DEFAULT NULL",
+			);
+		} catch {
+			// Column already exists, ignore
+		}
+
 	}
 
 	/**
@@ -353,22 +364,57 @@ export class SqliteRepoStorage
 	}
 
 	/**
-	 * Get the activation state of the account.
+	 * Get the account status string (active, deactivated, deleted).
 	 */
-	async getActive(): Promise<boolean> {
+	getStatus(): string {
 		const rows = this.sql
-			.exec("SELECT active FROM repo_state WHERE id = 1")
+			.exec("SELECT status FROM repo_state WHERE id = 1")
 			.toArray();
-		return rows.length > 0 ? ((rows[0]!.active as number) === 1) : true;
+		return rows.length > 0 ? ((rows[0]!.status as string) ?? "active") : "active";
 	}
 
 	/**
-	 * Set the activation state of the account.
+	 * Set the account status.
 	 */
-	async setActive(active: boolean): Promise<void> {
+	setStatus(status: string): void {
 		this.sql.exec(
-			"UPDATE repo_state SET active = ? WHERE id = 1",
-			active ? 1 : 0,
+			"UPDATE repo_state SET status = ? WHERE id = 1",
+			status,
+		);
+	}
+
+	/**
+	 * Get the activation state of the account (derived from status).
+	 */
+	async getActive(): Promise<boolean> {
+		return this.getStatus() === "active";
+	}
+
+
+	/**
+	 * Clear bulk data for account deletion while preserving tombstone state.
+	 * Deletes blocks, record_blob, imported_blobs, collections, passkeys,
+	 * passkey_tokens, preferences data. Nulls out root_cid/rev in repo_state.
+	 */
+	clearBulkData(): void {
+		this.sql.exec("DELETE FROM blocks");
+		this.sql.exec("DELETE FROM record_blob");
+		this.sql.exec("DELETE FROM imported_blobs");
+		this.sql.exec("DELETE FROM collections");
+		this.sql.exec("DELETE FROM passkeys");
+		this.sql.exec("DELETE FROM passkey_tokens");
+		this.sql.exec("UPDATE preferences SET data = '[]' WHERE id = 1");
+		this.sql.exec(
+			"UPDATE repo_state SET root_cid = NULL, rev = NULL WHERE id = 1",
+		);
+	}
+
+	/**
+	 * Clear signing keys from atproto_identity (keep did and handle for tombstone).
+	 */
+	clearSigningKeys(): void {
+		this.sql.exec(
+			"UPDATE atproto_identity SET signing_key = '', signing_key_public = '', updated_at = datetime('now')",
 		);
 	}
 
@@ -815,6 +861,35 @@ export class SqliteRepoStorage
 			.toArray();
 		if (rows.length === 0) return null;
 		return (rows[0]!.custom_pds_url as string) ?? null;
+	}
+
+	/**
+	 * Get the custom verification key for this account.
+	 * When set, the DID document will use this key instead of the account's own key.
+	 */
+	getCustomVerificationKey(): string | null {
+		const rows = this.sql
+			.exec("SELECT custom_verification_key FROM atproto_identity LIMIT 1")
+			.toArray();
+		if (rows.length === 0) return null;
+		return (rows[0]!.custom_verification_key as string) ?? null;
+	}
+
+	/**
+	 * Set the custom verification key for this account.
+	 * @param key - Multibase-encoded public key (must start with "z"), or null to reset to default
+	 */
+	setCustomVerificationKey(key: string | null): void {
+		if (key !== null) {
+			if (!key.startsWith("z") || key.length < 2) {
+				throw new Error("Custom verification key must be a non-empty multibase base58btc string (starting with 'z')");
+			}
+		}
+
+		this.sql.exec(
+			"UPDATE atproto_identity SET custom_verification_key = ?, updated_at = datetime('now')",
+			key,
+		);
 	}
 
 	/**

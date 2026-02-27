@@ -88,6 +88,19 @@ export function fidToHandle(fid: string, domain: string): string {
 }
 
 /**
+ * Derive the PDS hostname from FID.
+ *
+ * The PDS hostname is distinct from the handle/DID hostname. The DID remains
+ * `did:web:NNN.fid.is` but the PDS service endpoint uses `pds-NNN.fid.is`.
+ * This gives relays a fresh hostname to connect to after account re-creation.
+ *
+ * @example fidToPdsHostname("123", "fid.is") => "pds-123.fid.is"
+ */
+export function fidToPdsHostname(fid: string, domain: string): string {
+	return `pds-${fid}.${domain}`;
+}
+
+/**
  * Extract FID from DID.
  * @example didToFid("did:web:123.fid.is", "fid.is") => "123"
  * @returns Valid FID string or null if DID doesn't match expected format
@@ -119,7 +132,7 @@ export function hostnameToFid(hostname: string, domain: string): string | null {
 	// Regex matches positive integers only:
 	// - [1-9] first digit must be 1-9 (rejects "0" and leading zeros like "0123")
 	// - \d* followed by zero or more digits
-	const regex = new RegExp(`^([1-9]\\d*)\\.${escapeRegex(domain)}$`);
+	const regex = new RegExp(`^(?:pds-)?([1-9]\\d*)\\.${escapeRegex(domain)}$`);
 	const match = hostname.match(regex);
 	if (!match || !match[1]) return null;
 	return match[1];

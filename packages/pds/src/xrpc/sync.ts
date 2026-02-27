@@ -42,6 +42,37 @@ export async function getRepo(
 	});
 }
 
+export async function getLatestCommit(
+	c: Context<AppEnv>,
+	accountDO: DurableObjectStub<AccountDurableObject>,
+): Promise<Response> {
+	const did = c.req.query("did");
+
+	if (!did) {
+		return c.json(
+			{
+				error: "InvalidRequest",
+				message: "Missing required parameter: did",
+			},
+			400,
+		);
+	}
+
+	if (!isDid(did)) {
+		return c.json(
+			{ error: "InvalidRequest", message: "Invalid DID format" },
+			400,
+		);
+	}
+
+	const data = await accountDO.rpcGetRepoStatus();
+
+	return c.json({
+		cid: data.head,
+		rev: data.rev,
+	});
+}
+
 export async function getRepoStatus(
 	c: Context<AppEnv>,
 	accountDO: DurableObjectStub<AccountDurableObject>,
@@ -68,12 +99,16 @@ export async function getRepoStatus(
 
 	const data = await accountDO.rpcGetRepoStatus();
 
-	return c.json({
-		did: data.did,
-		active: true,
-		status: "active",
-		rev: data.rev,
-	});
+	const response: Record<string, unknown> = {
+		did: data.did || did,
+		active: data.active,
+	};
+	if (data.active) {
+		response.rev = data.rev;
+	} else {
+		response.status = data.status;
+	}
+	return c.json(response);
 }
 
 export async function listRepos(
@@ -83,16 +118,18 @@ export async function listRepos(
 	// Single-user PDS - just return our one repo
 	const data = await accountDO.rpcGetRepoStatus();
 
-	return c.json({
-		repos: [
-			{
-				did: data.did,
-				head: data.head,
-				rev: data.rev,
-				active: true,
-			},
-		],
-	});
+	const repo: Record<string, unknown> = {
+		did: data.did,
+		head: data.head,
+		active: data.active,
+	};
+	if (data.active) {
+		repo.rev = data.rev;
+	} else {
+		repo.status = data.status;
+	}
+
+	return c.json({ repos: [repo] });
 }
 
 export async function listBlobs(

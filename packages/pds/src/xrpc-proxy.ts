@@ -45,8 +45,9 @@ type GetAccountDO = (env: PDSEnv, did: string) => DurableObjectStub<AccountDurab
 export async function handleXrpcProxy(
 	c: Context<{ Bindings: PDSEnv }>,
 	didResolver: DidResolver,
-	getKeypair: () => Promise<Secp256k1Keypair>,
+	getKeypair: (userDid: string) => Promise<Secp256k1Keypair>,
 	getAccountDO: GetAccountDO,
+	preVerifiedDid?: string,
 ): Promise<Response> {
 	// Extract XRPC method name from path (e.g., "app.bsky.feed.getTimeline")
 	const url = new URL(c.req.url);
@@ -147,9 +148,11 @@ export async function handleXrpcProxy(
 	// Verify auth and create service JWT for target service
 	let headers: Record<string, string> = {};
 	const auth = c.req.header("Authorization");
-	let userDid: string | undefined;
+	let userDid: string | undefined = preVerifiedDid;
 
-	if (auth?.startsWith("DPoP ")) {
+	if (userDid) {
+		// DID already verified by upstream middleware (e.g. DPoP middleware)
+	} else if (auth?.startsWith("DPoP ")) {
 		// Verify DPoP-bound OAuth access token
 		// Uses hostname-based OAuth provider for per-user subdomain architecture
 		try {
@@ -201,7 +204,7 @@ export async function handleXrpcProxy(
 	// Create service JWT if user is authenticated
 	if (userDid) {
 		try {
-			const keypair = await getKeypair();
+			const keypair = await getKeypair(userDid);
 			const serviceJwt = await createServiceJwt({
 				iss: userDid,
 				aud: audienceDid,
@@ -250,5 +253,21 @@ export async function handleXrpcProxy(
 		reqInit.body = c.req.raw.body;
 	}
 
-	return fetch(targetUrl.toString(), reqInit);
+	const proxyRes = await fetch(targetUrl.toString(), reqInit);
+
+	if (!proxyRes.ok) {
+		// Log failed proxy responses for debugging
+		const body = await proxyRes.text();
+		console.error(
+			`[xrpc-proxy] ${c.req.method} ${lxm} → ${targetUrl.origin} ${proxyRes.status}: ${body.slice(0, 500)}`,
+			{ userDid, audienceDid, hasAuth: !!headers["Authorization"] },
+		);
+		// Return the upstream error as-is
+		return new Response(body, {
+			status: proxyRes.status,
+			headers: proxyRes.headers,
+		});
+	}
+
+	return proxyRes;
 }

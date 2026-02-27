@@ -5,6 +5,12 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 
+/** File used to pass the server port from global setup to test workers */
+export const PORT_FILE = join(
+	dirname(fileURLToPath(import.meta.url)),
+	".e2e-port",
+);
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 let serverProcess: ChildProcess;
@@ -52,10 +58,39 @@ export async function setup() {
 
 	// Start Vite dev server
 	const port = await startViteServer(tempDir);
+
+	// Wait for the Cloudflare Worker to be ready inside Vite.
+	// Vite's HTTP server starts before the Worker environment loads,
+	// so we poll the /__test/ping endpoint until the Worker responds.
+	await waitForWorkerReady(port);
 	console.log(`E2E test server started on port ${port}`);
+
+	// Write port to a file so test workers can read it
+	// (globalSetup runs in a separate process from test workers)
+	await writeFile(PORT_FILE, port.toString());
 
 	(globalThis as Record<string, unknown>).__e2e_port__ = port;
 	(globalThis as Record<string, unknown>).__e2e_tempDir__ = tempDir;
+}
+
+async function waitForWorkerReady(
+	port: number,
+	timeoutMs = 30000,
+): Promise<void> {
+	const start = Date.now();
+	while (Date.now() - start < timeoutMs) {
+		try {
+			const res = await fetch(`http://localhost:${port}/__test/ping`);
+			const text = await res.text();
+			if (text === "pong") return;
+		} catch {
+			// Server not ready yet
+		}
+		await new Promise((r) => setTimeout(r, 500));
+	}
+	throw new Error(
+		`Worker not ready after ${timeoutMs}ms on port ${port}`,
+	);
 }
 
 function startViteServer(cwd: string): Promise<number> {
@@ -112,6 +147,13 @@ export async function teardown() {
 	if (serverProcess) {
 		serverProcess.kill();
 		console.log("E2E test server stopped");
+	}
+
+	// Clean up port file
+	try {
+		await rm(PORT_FILE);
+	} catch {
+		// Ignore if already removed
 	}
 
 	// Clean up temp directory

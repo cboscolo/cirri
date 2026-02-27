@@ -31,6 +31,15 @@ function checkAccountDeactivatedError(
 	err: unknown,
 ): Response | null {
 	const message = err instanceof Error ? err.message : String(err);
+	if (message.startsWith("AccountDeleted:")) {
+		return c.json(
+			{
+				error: "AccountDeleted",
+				message: "Account has been deleted.",
+			},
+			410,
+		);
+	}
 	if (message.startsWith("AccountDeactivated:")) {
 		return c.json(
 			{
@@ -71,8 +80,12 @@ export async function describeRepo(
 	// Get repo info from the DO (routed by DID at the index.ts level)
 	const data = await accountDO.rpcDescribeRepo();
 
-	// Get identity from DO for DID document
-	const identity = await accountDO.rpcGetAtprotoIdentity();
+	// Get identity and custom PDS settings from DO
+	const [identity, customPdsUrl, customVerificationKey] = await Promise.all([
+		accountDO.rpcGetAtprotoIdentity(),
+		accountDO.rpcGetCustomPdsUrl(),
+		accountDO.rpcGetCustomVerificationKey(),
+	]);
 	if (!identity) {
 		return c.json(
 			{
@@ -83,11 +96,19 @@ export async function describeRepo(
 		);
 	}
 
+	const pdsHostname = `pds-${identity.handle}`;
+	const serviceEndpoint = customPdsUrl || `https://${pdsHostname}`;
+	const verificationKey = customVerificationKey || identity.signingKeyPublic;
+
 	return c.json({
 		did: identity.did,
 		handle: identity.handle,
 		didDoc: {
-			"@context": ["https://www.w3.org/ns/did/v1"],
+			"@context": [
+				"https://www.w3.org/ns/did/v1",
+				"https://w3id.org/security/multikey/v1",
+				"https://w3id.org/security/suites/secp256k1-2019/v1",
+			],
 			id: identity.did,
 			alsoKnownAs: [`at://${identity.handle}`],
 			verificationMethod: [
@@ -95,7 +116,14 @@ export async function describeRepo(
 					id: `${identity.did}#atproto`,
 					type: "Multikey",
 					controller: identity.did,
-					publicKeyMultibase: identity.signingKeyPublic,
+					publicKeyMultibase: verificationKey,
+				},
+			],
+			service: [
+				{
+					id: "#atproto_pds",
+					type: "AtprotoPersonalDataServer",
+					serviceEndpoint,
 				},
 			],
 		},
