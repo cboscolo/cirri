@@ -31,6 +31,22 @@ export async function getRepo(
 	// Note: DID validation for multi-tenant is done at routing level in index.ts
 	// The accountDO is already routed to the correct DO based on the DID
 
+	const data = await accountDO.rpcGetRepoStatus();
+
+	if (!data.did || !data.head) {
+		return c.json(
+			{ error: "RepoNotFound", message: "Could not find repo for DID" },
+			400,
+		);
+	}
+
+	if (data.status === "deactivated") {
+		return c.json(
+			{ error: "RepoDeactivated", message: "Repo is deactivated" },
+			400,
+		);
+	}
+
 	const carBytes = await accountDO.rpcGetRepoCar();
 
 	return new Response(carBytes, {
@@ -67,6 +83,20 @@ export async function getLatestCommit(
 
 	const data = await accountDO.rpcGetRepoStatus();
 
+	if (!data.did || !data.head) {
+		return c.json(
+			{ error: "RepoNotFound", message: "Could not find repo for DID" },
+			400,
+		);
+	}
+
+	if (data.status === "deactivated") {
+		return c.json(
+			{ error: "RepoDeactivated", message: "Repo is deactivated" },
+			400,
+		);
+	}
+
 	return c.json({
 		cid: data.head,
 		rev: data.rev,
@@ -99,8 +129,15 @@ export async function getRepoStatus(
 
 	const data = await accountDO.rpcGetRepoStatus();
 
+	if (!data.did) {
+		return c.json(
+			{ error: "RepoNotFound", message: "Could not find repo for DID" },
+			400,
+		);
+	}
+
 	const response: Record<string, unknown> = {
-		did: data.did || did,
+		did: data.did,
 		active: data.active,
 	};
 	if (data.active) {
