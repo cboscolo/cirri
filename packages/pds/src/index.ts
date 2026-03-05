@@ -274,6 +274,14 @@ app.get("/", (c) => {
 <meta property="og:title" content="fid.is">
 <meta property="og:description" content="Your Farcaster identity on Bluesky. One account. Two networks.">
 <meta property="og:type" content="website">
+<meta property="og:url" content="https://fid.is">
+<meta property="og:image" content="https://my.fid.is/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="fid.is">
+<meta name="twitter:description" content="Your Farcaster identity on Bluesky. One account. Two networks.">
+<meta name="twitter:image" content="https://my.fid.is/og-image.png">
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
