@@ -48,7 +48,7 @@ export async function registrationOptions(
 	const existingPasskeys = await accountDO.rpcListPasskeys();
 
 	const options = await generateRegistrationOptions({
-		rpName: "WebFID",
+		rpName: "fid.is",
 		rpID,
 		userName: did,
 		userDisplayName: did,

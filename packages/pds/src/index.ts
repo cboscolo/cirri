@@ -266,7 +266,11 @@ app.get("/", (c) => {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>fid.is PDS</title>
+<title>fid.is</title>
+<meta name="description" content="Your Farcaster identity on Bluesky. One account. Two networks.">
+<meta property="og:title" content="fid.is">
+<meta property="og:description" content="Your Farcaster identity on Bluesky. One account. Two networks.">
+<meta property="og:type" content="website">
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -275,21 +279,55 @@ body {
 	flex-direction: column;
 	justify-content: center;
 	align-items: center;
-	font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, Consolas, 'DejaVu Sans Mono', monospace;
-	background: #f0f0f0;
-	color: #000;
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+	background: #0a0a0a;
+	color: #fafafa;
 	padding: 2rem;
 }
-.logo { font-size: clamp(4rem, 15vw, 10rem); line-height: 1; }
-.name { font-size: clamp(1.5rem, 5vw, 3rem); font-weight: 700; letter-spacing: 0.2em; margin: 1rem 0; }
-.what { font-size: clamp(0.8rem, 2vw, 1rem); color: #666; max-width: 400px; text-align: center; }
-.version { position: fixed; bottom: 1rem; right: 1rem; font-size: 0.7rem; color: #999; }
+.brand {
+	font-size: clamp(3rem, 12vw, 6rem);
+	font-weight: 700;
+	line-height: 1;
+	background: linear-gradient(135deg, #7c6aef, #38bdf8);
+	-webkit-background-clip: text;
+	-webkit-text-fill-color: transparent;
+	background-clip: text;
+}
+.tagline {
+	font-size: clamp(1rem, 3vw, 1.25rem);
+	color: #a1a1aa;
+	margin-top: 1rem;
+	text-align: center;
+}
+.cta {
+	margin-top: 2rem;
+	display: inline-block;
+	padding: 0.75rem 2rem;
+	background: #3b82f6;
+	color: #fff;
+	text-decoration: none;
+	border-radius: 8px;
+	font-size: 1rem;
+	font-weight: 500;
+	transition: background 0.15s;
+}
+.cta:hover { background: #2563eb; }
+.sub {
+	margin-top: 1.5rem;
+	font-size: 0.875rem;
+	color: #52525b;
+	text-align: center;
+	max-width: 400px;
+	line-height: 1.5;
+}
+.version { position: fixed; bottom: 1rem; right: 1rem; font-size: 0.7rem; color: #3f3f46; }
 </style>
 </head>
 <body>
-<div class="logo">🟣</div>
-<div class="name">FID.IS</div>
-<div class="what">Farcaster-to-ATProto Bridge<br/>Bring your FID to the Atmosphere</div>
+<div class="brand">fid.is</div>
+<div class="tagline">Your Farcaster identity on Bluesky</div>
+<a class="cta" href="https://my.fid.is">Get Started</a>
+<div class="sub">One account. Two networks. Use your Farcaster identity to post on Bluesky. No new account, no new password.</div>
 <div class="version">v${version}</div>
 </body>
 </html>`;

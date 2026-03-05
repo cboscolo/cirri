@@ -670,9 +670,9 @@ function ConfirmCreateScreen({
 	return (
 		<div className="container">
 			<div className="card">
-				<h1 className="title">Create Account</h1>
+				<h1 className="title">Join Bluesky</h1>
 				<p className="subtitle">
-					No AT Protocol account found for your Farcaster identity.
+					Use your Farcaster identity to create your Bluesky account.
 				</p>
 
 				{(profile.pfpUrl || profile.displayName || profile.fname || profile.bio) && (
@@ -704,7 +704,7 @@ function ConfirmCreateScreen({
 
 				{fnameHandle ? (
 					<div className="info">
-						<div className="info-label">Choose your AT Protocol Handle</div>
+						<div className="info-label">Choose your handle</div>
 						<div className="handle-options">
 							<label className="handle-option">
 								<input
@@ -754,15 +754,14 @@ function ConfirmCreateScreen({
 						fontSize: 14,
 					}}
 				>
-					Would you like to create a new AT Protocol account linked to your
-					Farcaster identity?
+					This creates a Bluesky account linked to your Farcaster identity. Takes about 10 seconds.
 				</p>
 
 				<button
 					onClick={() => onCreateAccount(selectedHandle)}
 					disabled={!canCreate}
 				>
-					Create Account
+					Join Bluesky
 				</button>
 			</div>
 		</div>
@@ -1248,12 +1247,11 @@ function AppContent() {
 		return (
 			<div className="container">
 				<div className="card">
-					<h1 className="title">WebFID</h1>
-					<p className="subtitle">AT Protocol on Farcaster</p>
+					<h1 className="title">fid.is</h1>
+					<p className="subtitle">Your Farcaster identity on Bluesky</p>
 
 					<p style={{ marginBottom: 24, color: "var(--muted)", fontSize: 14 }}>
-						Create or access your AT Protocol account using your Farcaster
-						identity.
+						One account. Two networks. Sign in with Farcaster to get started.
 					</p>
 
 					<div
@@ -1281,8 +1279,7 @@ function AppContent() {
 							textAlign: "center",
 						}}
 					>
-						Sign in with your Farcaster account to create or access your AT
-						Protocol identity.
+						Use your Farcaster account to join Bluesky and the AT Protocol network.
 					</p>
 				</div>
 			</div>
@@ -1326,12 +1323,12 @@ function AppContent() {
 		<div className="container">
 			<div className="card">
 				<h1 className="title">
-					{isNew ? "Welcome to WebFID!" : "Welcome Back!"}
+					{isNew ? "You're on Bluesky" : "Welcome Back"}
 				</h1>
 				<p className="subtitle">
 					{isNew
-						? "Your AT Protocol account has been created."
-						: "You're connected to your AT Protocol account."}
+						? "Your account is live on the Bluesky network."
+						: "Connected to your account."}
 				</p>
 
 				<div className="info">
@@ -1346,8 +1343,7 @@ function AppContent() {
 
 				{isNew && (
 					<p className="success">
-						Your account is ready! You can now use Bluesky clients with your
-						Farcaster identity.
+						Sign in to any Bluesky app with your handle above. Your Farcaster identity is your key.
 					</p>
 				)}
 
