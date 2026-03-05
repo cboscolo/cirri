@@ -248,7 +248,7 @@ export async function completePasskeyRegistration(
  */
 export async function getAuthenticationOptions(
 	accountDO: DurableObjectStub<AccountDurableObject>,
-	pdsHostname: string,
+	domain: string,
 ): Promise<PublicKeyCredentialRequestOptionsJSON | null> {
 	// Get all registered passkeys
 	const passkeys = await accountDO.rpcListPasskeys();
@@ -256,9 +256,9 @@ export async function getAuthenticationOptions(
 		return null;
 	}
 
-	// Explicitly list credential IDs - more compatible than discoverable credentials
+	// Use the base domain (e.g. "fid.is") as RP ID to match registration
 	const options = await generateAuthenticationOptions({
-		rpID: pdsHostname,
+		rpID: domain,
 		userVerification: "preferred",
 		allowCredentials: passkeys.map((pk) => ({
 			id: pk.credentialId,
@@ -279,7 +279,8 @@ export async function getAuthenticationOptions(
  */
 export async function verifyPasskeyAuthentication(
 	accountDO: DurableObjectStub<AccountDurableObject>,
-	pdsHostname: string,
+	domain: string,
+	origin: string,
 	response: AuthenticationResponseJSON,
 	challenge: string,
 ): Promise<{ success: true } | { success: false; error: string }> {
@@ -297,11 +298,12 @@ export async function verifyPasskeyAuthentication(
 		}
 
 		// Verify the authentication response
+		// RP ID is the base domain (matches registration), origin is the actual PDS subdomain
 		const verification = await verifyAuthenticationResponse({
 			response,
 			expectedChallenge: challenge,
-			expectedOrigin: `https://${pdsHostname}`,
-			expectedRPID: pdsHostname,
+			expectedOrigin: origin,
+			expectedRPID: domain,
 			credential: {
 				id: passkey.credentialId,
 				publicKey: new Uint8Array(passkey.publicKey),

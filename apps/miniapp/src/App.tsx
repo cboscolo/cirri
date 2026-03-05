@@ -6,6 +6,7 @@ import {
 	type StatusAPIResponse,
 } from "@farcaster/auth-kit";
 import "@farcaster/auth-kit/styles.css";
+import { startRegistration } from "@simplewebauthn/browser";
 import {
 	createAccount,
 	createAccountSiwf,
@@ -29,6 +30,11 @@ import {
 	getRelaySeq,
 	emitIdentityEvent,
 	emitAccountEvent,
+	getPasskeyRegistrationOptions,
+	registerPasskey,
+	listPasskeys,
+	deletePasskeyApi,
+	renamePasskeyApi,
 	type SessionResponse,
 	type SiwfCredentials,
 	type FarcasterProfile,
@@ -36,6 +42,7 @@ import {
 	type HandleConfig,
 	type DebugInfo,
 	type DebugField,
+	type PasskeyInfo,
 } from "./api";
 
 type AppState =
@@ -308,6 +315,177 @@ function HandleSection({
 					{saving ? "Switching..." : `Switch to @${defaultHandle}`}
 				</button>
 			)}
+		</div>
+	);
+}
+
+// Passkey management component
+function PasskeySection({ accessToken, pdsBase }: { accessToken: string; pdsBase: string }) {
+	const [passkeys, setPasskeys] = useState<PasskeyInfo[]>([]);
+	const [loading, setLoading] = useState(true);
+	const [adding, setAdding] = useState(false);
+	const [deleting, setDeleting] = useState<string | null>(null);
+	const [renaming, setRenaming] = useState<string | null>(null);
+	const [renameValue, setRenameValue] = useState("");
+	const [error, setError] = useState<string | null>(null);
+	const [success, setSuccess] = useState<string | null>(null);
+
+	const loadPasskeys = useCallback(async () => {
+		try {
+			const list = await listPasskeys(accessToken, pdsBase);
+			setPasskeys(list);
+		} catch (err) {
+			setError(err instanceof Error ? err.message : "Failed to load passkeys");
+		} finally {
+			setLoading(false);
+		}
+	}, [accessToken, pdsBase]);
+
+	useEffect(() => {
+		loadPasskeys();
+	}, [loadPasskeys]);
+
+	const handleAdd = async () => {
+		setError(null);
+		setSuccess(null);
+		setAdding(true);
+
+		try {
+			// Step 1: Get registration options from the server
+			const { options, token } = await getPasskeyRegistrationOptions(accessToken, pdsBase);
+
+			// Step 2: Start the WebAuthn ceremony in the browser
+			const attResp = await startRegistration({ optionsJSON: options });
+
+			// Step 3: Send the response back to the server for verification
+			const defaultName = `Passkey ${new Date().toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`;
+			await registerPasskey(accessToken, pdsBase, token, attResp, defaultName);
+
+			setSuccess("Passkey registered!");
+			setTimeout(() => setSuccess(null), 3000);
+			await loadPasskeys();
+		} catch (err) {
+			if (err instanceof Error && err.name === "NotAllowedError") {
+				setError("Passkey registration was cancelled");
+			} else {
+				setError(err instanceof Error ? err.message : "Failed to add passkey");
+			}
+		} finally {
+			setAdding(false);
+		}
+	};
+
+	const handleDelete = async (credentialId: string) => {
+		setError(null);
+		setSuccess(null);
+		setDeleting(credentialId);
+
+		try {
+			await deletePasskeyApi(accessToken, pdsBase, credentialId);
+			setSuccess("Passkey deleted");
+			setTimeout(() => setSuccess(null), 3000);
+			await loadPasskeys();
+		} catch (err) {
+			setError(err instanceof Error ? err.message : "Failed to delete passkey");
+		} finally {
+			setDeleting(null);
+		}
+	};
+
+	const startRename = (pk: PasskeyInfo) => {
+		setRenaming(pk.id);
+		setRenameValue(pk.name || "");
+	};
+
+	const handleRename = async (credentialId: string) => {
+		const trimmed = renameValue.trim();
+		if (!trimmed) return;
+		setError(null);
+		try {
+			await renamePasskeyApi(accessToken, pdsBase, credentialId, trimmed);
+			setRenaming(null);
+			await loadPasskeys();
+		} catch (err) {
+			setError(err instanceof Error ? err.message : "Failed to rename passkey");
+		}
+	};
+
+	if (loading) {
+		return (
+			<div className="settings-section">
+				<div className="settings-header">Passkeys</div>
+				<div style={{ color: "var(--muted)", fontSize: 14 }}>Loading...</div>
+			</div>
+		);
+	}
+
+	return (
+		<div className="settings-section">
+			<div className="settings-header">Passkeys</div>
+			<div className="settings-description">
+				Passkeys let you sign in with biometrics or your device's security key.
+			</div>
+
+			{passkeys.length > 0 && (
+				<div className="passkey-list">
+					{passkeys.map((pk) => (
+						<div key={pk.id} className="passkey-item">
+							<div className="passkey-info">
+								{renaming === pk.id ? (
+									<form className="passkey-rename-form" onSubmit={(e) => { e.preventDefault(); handleRename(pk.id); }}>
+										<input
+											className="passkey-rename-input"
+											value={renameValue}
+											onChange={(e) => setRenameValue(e.target.value)}
+											autoFocus
+											maxLength={100}
+											onKeyDown={(e) => { if (e.key === "Escape") setRenaming(null); }}
+										/>
+										<button type="submit" className="passkey-rename-save">Save</button>
+										<button type="button" className="passkey-rename-cancel" onClick={() => setRenaming(null)}>Cancel</button>
+									</form>
+								) : (
+									<div className="passkey-name" onClick={() => startRename(pk)} title="Click to rename">
+										{pk.name || "Unnamed passkey"}
+									</div>
+								)}
+								<div className="passkey-meta">
+									Added {new Date(pk.createdAt).toLocaleDateString()}
+									{pk.lastUsedAt && (
+										<> · Last used {new Date(pk.lastUsedAt).toLocaleDateString()}</>
+									)}
+								</div>
+							</div>
+							{renaming !== pk.id && (
+								<button
+									className="passkey-delete-button"
+									onClick={() => handleDelete(pk.id)}
+									disabled={deleting === pk.id}
+								>
+									{deleting === pk.id ? "..." : "Delete"}
+								</button>
+							)}
+						</div>
+					))}
+				</div>
+			)}
+
+			{passkeys.length === 0 && (
+				<div style={{ color: "var(--muted)", fontSize: 13, marginBottom: 12 }}>
+					No passkeys registered yet.
+				</div>
+			)}
+
+			{error && <div className="settings-error">{error}</div>}
+			{success && <div className="settings-success">{success}</div>}
+
+			<button
+				onClick={handleAdd}
+				disabled={adding}
+				className="save-button"
+			>
+				{adding ? "Registering..." : "Add Passkey"}
+			</button>
 		</div>
 	);
 }
@@ -1187,6 +1365,8 @@ function AppContent() {
 				/>
 
 				<SettingsSection accessToken={session.accessJwt} pdsBase={pdsBaseFromDid(session.did)} />
+
+				<PasskeySection accessToken={session.accessJwt} pdsBase={pdsBaseFromDid(session.did)} />
 
 				<DeleteAccountSection
 					accessToken={session.accessJwt}

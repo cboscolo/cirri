@@ -442,16 +442,14 @@ export async function loginWithPasskey(
 
 /**
  * Get passkey registration options for adding a new passkey.
+ * Returns WebAuthn PublicKeyCredentialCreationOptions and a token for verification.
  */
 export async function getPasskeyRegistrationOptions(
 	accessToken: string,
 	pdsBase: string,
 ): Promise<{
-	challenge: string;
-	rpId: string;
-	rpName: string;
-	userId: string;
-	userName: string;
+	options: any;
+	token: string;
 }> {
 	const response = await fetch(
 		`${pdsBase}/xrpc/is.fid.passkey.registrationOptions`,
@@ -473,45 +471,123 @@ export async function getPasskeyRegistrationOptions(
 	}
 
 	return data as {
-		challenge: string;
-		rpId: string;
-		rpName: string;
-		userId: string;
-		userName: string;
+		options: any;
+		token: string;
 	};
 }
 
 /**
- * Register a new passkey.
+ * Complete passkey registration.
+ * Sends the WebAuthn response and token for server verification.
  */
 export async function registerPasskey(
 	accessToken: string,
 	pdsBase: string,
-	credential: {
-		credentialId: string;
-		publicKey: string;
-		attestationObject: string;
-		clientDataJSON: string;
-	},
+	token: string,
+	response: unknown,
+	name?: string,
 ): Promise<{ success: boolean }> {
-	const response = await fetch(`${pdsBase}/xrpc/is.fid.passkey.register`, {
+	const res = await fetch(`${pdsBase}/xrpc/is.fid.passkey.register`, {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",
 			Authorization: `Bearer ${accessToken}`,
 		},
-		body: JSON.stringify(credential),
+		body: JSON.stringify({ token, response, name }),
 	});
 
-	const data = await response.json();
+	const data = await res.json();
 
-	if (!response.ok) {
+	if (!res.ok) {
 		throw new Error(
 			(data as ErrorResponse).message || "Failed to register passkey",
 		);
 	}
 
 	return data as { success: boolean };
+}
+
+export interface PasskeyInfo {
+	id: string;
+	name: string | null;
+	createdAt: string;
+	lastUsedAt: string | null;
+}
+
+/**
+ * List registered passkeys for the authenticated user.
+ */
+export async function listPasskeys(
+	accessToken: string,
+	pdsBase: string,
+): Promise<PasskeyInfo[]> {
+	const response = await fetch(`${pdsBase}/xrpc/is.fid.passkey.list`, {
+		method: "GET",
+		headers: {
+			Authorization: `Bearer ${accessToken}`,
+		},
+	});
+
+	const data = await response.json();
+
+	if (!response.ok) {
+		throw new Error(
+			(data as ErrorResponse).message || "Failed to list passkeys",
+		);
+	}
+
+	return (data as { passkeys: PasskeyInfo[] }).passkeys;
+}
+
+/**
+ * Delete a passkey by credential ID.
+ */
+export async function deletePasskeyApi(
+	accessToken: string,
+	pdsBase: string,
+	credentialId: string,
+): Promise<void> {
+	const response = await fetch(`${pdsBase}/xrpc/is.fid.passkey.delete`, {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			Authorization: `Bearer ${accessToken}`,
+		},
+		body: JSON.stringify({ credentialId }),
+	});
+
+	if (!response.ok) {
+		const data = await response.json().catch(() => ({}));
+		throw new Error(
+			(data as ErrorResponse).message || "Failed to delete passkey",
+		);
+	}
+}
+
+/**
+ * Rename a passkey.
+ */
+export async function renamePasskeyApi(
+	accessToken: string,
+	pdsBase: string,
+	credentialId: string,
+	name: string,
+): Promise<void> {
+	const response = await fetch(`${pdsBase}/xrpc/is.fid.passkey.rename`, {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			Authorization: `Bearer ${accessToken}`,
+		},
+		body: JSON.stringify({ credentialId, name }),
+	});
+
+	if (!response.ok) {
+		const data = await response.json().catch(() => ({}));
+		throw new Error(
+			(data as ErrorResponse).message || "Failed to rename passkey",
+		);
+	}
 }
 
 // ============================================

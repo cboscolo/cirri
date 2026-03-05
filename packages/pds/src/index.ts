@@ -34,6 +34,7 @@ import * as repo from "./xrpc/repo";
 import * as server from "./xrpc/server";
 import * as fidAccount from "./xrpc/fid-account";
 import * as fidSettings from "./xrpc/fid-settings";
+import * as fidPasskeys from "./xrpc/fid-passkeys";
 import {
 	hostnameToFid,
 	fidToDid,
@@ -385,6 +386,45 @@ app.post(
 	"/xrpc/is.fid.settings.setHandle",
 	requireAuth,
 	(c: any) => fidSettings.setHandle(c, getAccountDO(c.env, c.get("did"))),
+);
+
+// ============================================
+// FID Passkey Endpoints
+// ============================================
+
+// Get passkey registration options
+app.post(
+	"/xrpc/is.fid.passkey.registrationOptions",
+	requireAuth,
+	(c: any) => fidPasskeys.registrationOptions(c, getAccountDO(c.env, c.get("did"))),
+);
+
+// Complete passkey registration
+app.post(
+	"/xrpc/is.fid.passkey.register",
+	requireAuth,
+	(c: any) => fidPasskeys.register(c, getAccountDO(c.env, c.get("did"))),
+);
+
+// List registered passkeys
+app.get(
+	"/xrpc/is.fid.passkey.list",
+	requireAuth,
+	(c: any) => fidPasskeys.list(c, getAccountDO(c.env, c.get("did"))),
+);
+
+// Rename a passkey
+app.post(
+	"/xrpc/is.fid.passkey.rename",
+	requireAuth,
+	(c: any) => fidPasskeys.rename(c, getAccountDO(c.env, c.get("did"))),
+);
+
+// Delete a passkey
+app.post(
+	"/xrpc/is.fid.passkey.delete",
+	requireAuth,
+	(c: any) => fidPasskeys.remove(c, getAccountDO(c.env, c.get("did"))),
 );
 
 // ============================================

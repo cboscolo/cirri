@@ -1653,6 +1653,12 @@ export class AccountDurableObject extends DurableObject<PDSEnv> {
 		return storage.listPasskeys();
 	}
 
+	/** Rename a passkey */
+	async rpcRenamePasskey(credentialId: string, name: string): Promise<boolean> {
+		const storage = await this.getStorage();
+		return storage.renamePasskey(credentialId, name);
+	}
+
 	/** Delete a passkey */
 	async rpcDeletePasskey(credentialId: string): Promise<boolean> {
 		const storage = await this.getStorage();

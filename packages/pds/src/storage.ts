@@ -669,6 +669,16 @@ export class SqliteRepoStorage
 	}
 
 	/**
+	 * Rename a passkey.
+	 */
+	renamePasskey(credentialId: string, name: string): boolean {
+		const before = this.sql.exec("SELECT COUNT(*) as c FROM passkeys WHERE credential_id = ?", credentialId).one();
+		if ((before.c as number) === 0) return false;
+		this.sql.exec("UPDATE passkeys SET name = ? WHERE credential_id = ?", name, credentialId);
+		return true;
+	}
+
+	/**
 	 * Delete a passkey.
 	 */
 	deletePasskey(credentialId: string): boolean {

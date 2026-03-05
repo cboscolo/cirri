@@ -105,6 +105,7 @@ interface OAuthContext {
 	did: string;
 	handle: string;
 	hostname: string;
+	domain: string;
 	accountDO: DurableObjectStub<AccountDurableObject>;
 	alchemyApiKey?: string;
 }
@@ -131,7 +132,7 @@ function getOAuthContext(
 	const handle = fidToHandle(fid, domain);
 	const accountDO = getAccountDO(env, did);
 
-	return { fid, did, handle, hostname, accountDO, alchemyApiKey: env.ALCHEMY_API_KEY };
+	return { fid, did, handle, hostname, domain, accountDO, alchemyApiKey: env.ALCHEMY_API_KEY };
 }
 
 /**
@@ -178,14 +179,15 @@ function createProvider(ctx: OAuthContext): ATProtoOAuthProvider {
 		},
 		// Passkey authentication options
 		getPasskeyOptions: async (): Promise<Record<string, unknown> | null> => {
-			const options = await getAuthenticationOptions(ctx.accountDO, ctx.hostname);
+			const options = await getAuthenticationOptions(ctx.accountDO, ctx.domain);
 			return options as Record<string, unknown> | null;
 		},
 		// Passkey verification
 		verifyPasskey: async (response, challenge: string) => {
 			const result = await verifyPasskeyAuthentication(
 				ctx.accountDO,
-				ctx.hostname,
+				ctx.domain,
+				`https://${ctx.hostname}`,
 				response as AuthenticationResponseJSON,
 				challenge,
 			);

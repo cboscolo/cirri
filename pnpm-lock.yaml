@@ -38,13 +38,19 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.17.0
-        version: 1.23.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@6.4.1(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0))(workerd@1.20260210.0)(wrangler@4.64.0(bufferutil@4.1.0)(utf-8-validate@5.0.10))
+        version: 1.23.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@6.4.1(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0))(workerd@1.20260210.0)(wrangler@4.64.0(@cloudflare/workers-types@4.20260203.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10))
       '@cloudflare/workers-types':
         specifier: ^4.20251225.0
         version: 4.20260203.0
       vite:
         specifier: ^6.4.1
         version: 6.4.1(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0)
+      wrangler:
+        specifier: ^4.54.0
+        version: 4.64.0(@cloudflare/workers-types@4.20260203.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+
+  apps/fname-to-handle:
+    devDependencies:
       wrangler:
         specifier: ^4.54.0
         version: 4.64.0(@cloudflare/workers-types@4.20260203.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
@@ -57,6 +63,9 @@ importers:
       '@farcaster/miniapp-sdk':
         specifier: ^0.2.2
         version: 0.2.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
+      '@simplewebauthn/browser':
+        specifier: ^13.2.2
+        version: 13.2.2
       react:
         specifier: ^19.0.0
         version: 19.2.4
@@ -64,6 +73,9 @@ importers:
         specifier: ^19.0.0
         version: 19.2.4(react@19.2.4)
     devDependencies:
+      '@cloudflare/vite-plugin':
+        specifier: ^1.23.0
+        version: 1.23.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@6.4.1(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0))(workerd@1.20260210.0)(wrangler@4.64.0(@cloudflare/workers-types@4.20260203.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10))
       '@types/react':
         specifier: ^19.0.0
         version: 19.2.14
@@ -82,6 +94,9 @@ importers:
       vite:
         specifier: ^6.4.1
         version: 6.4.1(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0)
+      wrangler:
+        specifier: ^4.64.0
+        version: 4.64.0(@cloudflare/workers-types@4.20260203.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
 
   demos/pds:
     dependencies:
@@ -91,7 +106,7 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.17.0
-        version: 1.23.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@6.4.1(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0))(workerd@1.20260210.0)(wrangler@4.64.0(bufferutil@4.1.0)(utf-8-validate@5.0.10))
+        version: 1.23.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@6.4.1(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0))(workerd@1.20260210.0)(wrangler@4.64.0(@cloudflare/workers-types@4.20260203.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10))
       vite:
         specifier: ^6.4.1
         version: 6.4.1(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0)
@@ -237,7 +252,7 @@ importers:
         version: 0.18.20
       '@cloudflare/vite-plugin':
         specifier: ^1.17.0
-        version: 1.23.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@6.4.1(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0))(workerd@1.20260210.0)(wrangler@4.64.0(bufferutil@4.1.0)(utf-8-validate@5.0.10))
+        version: 1.23.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@6.4.1(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0))(workerd@1.20260210.0)(wrangler@4.64.0(@cloudflare/workers-types@4.20260203.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10))
       '@cloudflare/vitest-pool-workers':
         specifier: ^0.12.11
         version: 0.12.11(@cloudflare/workers-types@4.20260203.0)(@vitest/runner@4.1.0-beta.1)(@vitest/snapshot@4.1.0-beta.1)(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vitest@3.2.4(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0))
@@ -1861,6 +1876,9 @@ packages:
 
   '@scure/bip39@1.6.0':
     resolution: {integrity: sha512-+lF0BbLiJNwVlev4eKelw1WWLaiKXw7sSl8T6FvBlWkdX+94aGJ4o8XjUdlyhTCjd8c+B3KT3JfS8P0bLRNU6A==}
+
+  '@simplewebauthn/browser@13.2.2':
+    resolution: {integrity: sha512-FNW1oLQpTJyqG5kkDg5ZsotvWgmBaC6jCHR7Ej0qUNep36Wl9tj2eZu7J5rP+uhXgHaLk+QQ3lqcw2vS5MX1IA==}
 
   '@simplewebauthn/server@13.2.2':
     resolution: {integrity: sha512-HcWLW28yTMGXpwE9VLx9J+N2KEUaELadLrkPEEI9tpI5la70xNEVEsu/C+m3u7uoq4FulLqZQhgBCzR9IZhFpA==}
@@ -4108,7 +4126,7 @@ snapshots:
     optionalDependencies:
       workerd: 1.20260210.0
 
-  '@cloudflare/vite-plugin@1.23.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@6.4.1(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0))(workerd@1.20260210.0)(wrangler@4.64.0(bufferutil@4.1.0)(utf-8-validate@5.0.10))':
+  '@cloudflare/vite-plugin@1.23.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@6.4.1(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0))(workerd@1.20260210.0)(wrangler@4.64.0(@cloudflare/workers-types@4.20260203.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10))':
     dependencies:
       '@cloudflare/unenv-preset': 2.12.0(unenv@2.0.0-rc.24)(workerd@1.20260210.0)
       miniflare: 4.20260131.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
@@ -5060,6 +5078,8 @@ snapshots:
     dependencies:
       '@noble/hashes': 1.8.0
       '@scure/base': 1.2.6
+
+  '@simplewebauthn/browser@13.2.2': {}
 
   '@simplewebauthn/server@13.2.2':
     dependencies:

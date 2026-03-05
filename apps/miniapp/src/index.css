@@ -244,6 +244,96 @@ button:disabled {
 	margin-top: 8px;
 }
 
+/* Passkey List */
+.passkey-list {
+	margin-bottom: 12px;
+}
+
+.passkey-item {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 10px 0;
+	border-bottom: 1px solid var(--border);
+}
+
+.passkey-item:last-child {
+	border-bottom: none;
+}
+
+.passkey-name {
+	font-size: 14px;
+	color: var(--fg);
+	cursor: pointer;
+}
+
+.passkey-name:hover {
+	text-decoration: underline;
+	text-decoration-style: dotted;
+}
+
+.passkey-rename-form {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.passkey-rename-input {
+	font-size: 14px;
+	padding: 3px 6px;
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	background: var(--bg);
+	color: var(--fg);
+	width: 160px;
+}
+
+.passkey-rename-save,
+.passkey-rename-cancel {
+	background: transparent;
+	border: 1px solid var(--border);
+	color: var(--muted);
+	padding: 3px 8px;
+	font-size: 12px;
+	border-radius: 4px;
+	cursor: pointer;
+	min-width: auto;
+	width: auto;
+}
+
+.passkey-rename-save:hover {
+	color: var(--fg);
+	border-color: var(--fg);
+}
+
+.passkey-rename-cancel:hover {
+	color: var(--fg);
+	border-color: var(--fg);
+}
+
+.passkey-meta {
+	font-size: 12px;
+	color: var(--muted);
+	margin-top: 2px;
+}
+
+.passkey-delete-button {
+	background: transparent;
+	border: 1px solid var(--border);
+	color: var(--muted);
+	padding: 4px 10px;
+	font-size: 12px;
+	border-radius: 4px;
+	cursor: pointer;
+	min-width: auto;
+	width: auto;
+}
+
+.passkey-delete-button:hover {
+	color: var(--error);
+	border-color: var(--error);
+}
+
 /* Danger Zone / Delete Account */
 .danger-zone {
 	border-top-color: #7f1d1d;
