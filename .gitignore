@@ -30,3 +30,6 @@ signing-key-backup-*.txt
 
 # E2E test artifacts
 .e2e-port
+
+# Test wallet keys (contains private keys)
+.test-wallets.json

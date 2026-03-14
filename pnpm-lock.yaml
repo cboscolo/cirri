@@ -41,7 +41,7 @@ importers:
         version: 2.47.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.76)
       vitest:
         specifier: ~3.2.4
-        version: 3.2.4(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0)
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0)
 
   apps/fid-pds:
     dependencies:
@@ -107,6 +107,25 @@ importers:
       vite:
         specifier: ^6.4.1
         version: 6.4.1(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0)
+      wrangler:
+        specifier: ^4.64.0
+        version: 4.64.0(@cloudflare/workers-types@4.20260203.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+
+  apps/signup:
+    dependencies:
+      hono:
+        specifier: ^4.11.3
+        version: 4.11.7
+      viem:
+        specifier: ^2.47.0
+        version: 2.47.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^4.20250313.0
+        version: 4.20260203.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
       wrangler:
         specifier: ^4.64.0
         version: 4.64.0(@cloudflare/workers-types@4.20260203.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
@@ -177,7 +196,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ~3.2.4
-        version: 3.2.4(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0)
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0)
 
   packages/pds:
     dependencies:
@@ -274,7 +293,7 @@ importers:
         version: 1.23.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@6.4.1(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0))(workerd@1.20260210.0)(wrangler@4.64.0(@cloudflare/workers-types@4.20260203.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10))
       '@cloudflare/vitest-pool-workers':
         specifier: ^0.12.11
-        version: 0.12.11(@cloudflare/workers-types@4.20260203.0)(@vitest/runner@4.1.0-beta.1)(@vitest/snapshot@4.1.0-beta.1)(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vitest@3.2.4(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0))
+        version: 0.12.11(@cloudflare/workers-types@4.20260203.0)(@vitest/runner@4.1.0-beta.1)(@vitest/snapshot@4.1.0-beta.1)(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vitest@3.2.4(@types/debug@4.1.12)(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0))
       '@cloudflare/workers-types':
         specifier: ^4.20251225.0
         version: 4.20260203.0
@@ -304,7 +323,7 @@ importers:
         version: 6.4.1(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0)
       vitest:
         specifier: ~3.2.4
-        version: 3.2.4(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0)
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0)
       wrangler:
         specifier: ^4.54.0
         version: 4.64.0(@cloudflare/workers-types@4.20260203.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
@@ -1985,11 +2004,17 @@ packages:
   '@types/connect@3.4.38':
     resolution: {integrity: sha512-K6uROf1LD88uDQqJCktA4yzL1YYAK6NgfsI0v/mTgyPKWsX1CnJ0XPSDhViejru1GcRkLWb8RlzFYJRqGUbaug==}
 
+  '@types/debug@4.1.12':
+    resolution: {integrity: sha512-vIChWdVG3LG1SMxEvI/AK+FWJthlrqlTu7fbrlywTkkaONwk/UAGaULXRlf8vkzFBLVm0zkMdCquhL5aOjhXPQ==}
+
   '@types/deep-eql@4.0.2':
     resolution: {integrity: sha512-c9h9dVVMigMPc4bwTvC5dxqtqJZwQPePsWjPlpSOnojbor6pGqdk541lfA7AqFQr5pB1BRdq0juY9db81BwyFw==}
 
   '@types/estree@1.0.8':
     resolution: {integrity: sha512-dWHzHa2WqEXI/O1E9OjrocMTKJl2mSrEolh1Iomrv6U+JuNwaHXsXx9bLu5gG7BUWFIN0skIQJQ/L1rIex4X6w==}
+
+  '@types/ms@2.1.0':
+    resolution: {integrity: sha512-GsCCIZDE/p3i96vtEqx+7dBUGXrc7zeSK3wwPHIaRThS+9OhWIXRqzs4d6k1SVU8g91DrNRWxWUGhp5KXQb2VA==}
 
   '@types/node@12.20.55':
     resolution: {integrity: sha512-J8xLz7q2OFulZ2cyGTLE1TbbZcjpno7FaN6zdJNrgAdrJ+DZzh/uFR6YrTb4C+nXakvud8Q4+rbhoIWlYQbUFQ==}
@@ -2840,14 +2865,6 @@ packages:
   outdent@0.5.0:
     resolution: {integrity: sha512-/jHxFIzoMXdqPzTaCpFzAAWhpkSjZPF4Vsn6jAfNpmbH/ymsmd7Qc6VE9BGn0L6YMj6uwpQLxCECpus4ukKS9Q==}
 
-  ox@0.11.3:
-    resolution: {integrity: sha512-1bWYGk/xZel3xro3l8WGg6eq4YEKlaqvyMtVhfMFpbJzK2F6rj4EDRtqDCWVEJMkzcmEi9uW2QxsqELokOlarw==}
-    peerDependencies:
-      typescript: '>=5.4.0'
-    peerDependenciesMeta:
-      typescript:
-        optional: true
-
   ox@0.14.0:
     resolution: {integrity: sha512-WLOB7IKnmI3Ol6RAqY7CJdZKl8QaI44LN91OGF1061YIeN6bL5IsFcdp7+oQShRyamE/8fW/CBRWhJAOzI35Dw==}
     peerDependencies:
@@ -3466,14 +3483,6 @@ packages:
 
   varint@6.0.0:
     resolution: {integrity: sha512-cXEIW6cfr15lFv563k4GuVuW/fiwjknytD37jIOLSdSWuOI6WnO/oKwmP2FQTU2l01LP8/M5TSAJpzUaGe3uWg==}
-
-  viem@2.45.1:
-    resolution: {integrity: sha512-LN6Pp7vSfv50LgwhkfSbIXftAM5J89lP9x8TeDa8QM7o41IxlHrDh0F9X+FfnCWtsz11pEVV5sn+yBUoOHNqYA==}
-    peerDependencies:
-      typescript: '>=5.0.4'
-    peerDependenciesMeta:
-      typescript:
-        optional: true
 
   viem@2.47.0:
     resolution: {integrity: sha512-jU5e1E1s5E5M1y+YrELDnNar/34U8NXfVcRfxtVETigs2gS1vvW2ngnBoQUGBwLnNr0kNv+NUu4m10OqHByoFw==}
@@ -4238,14 +4247,14 @@ snapshots:
       - utf-8-validate
       - workerd
 
-  '@cloudflare/vitest-pool-workers@0.12.11(@cloudflare/workers-types@4.20260203.0)(@vitest/runner@4.1.0-beta.1)(@vitest/snapshot@4.1.0-beta.1)(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vitest@3.2.4(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0))':
+  '@cloudflare/vitest-pool-workers@0.12.11(@cloudflare/workers-types@4.20260203.0)(@vitest/runner@4.1.0-beta.1)(@vitest/snapshot@4.1.0-beta.1)(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vitest@3.2.4(@types/debug@4.1.12)(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0))':
     dependencies:
       '@vitest/runner': 4.1.0-beta.1
       '@vitest/snapshot': 4.1.0-beta.1
       cjs-module-lexer: 1.4.3
       esbuild: 0.27.3
       miniflare: 4.20260210.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
-      vitest: 3.2.4(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0)
+      vitest: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0)
       wrangler: 4.64.0(@cloudflare/workers-types@4.20260203.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     transitivePeerDependencies:
       - '@cloudflare/workers-types'
@@ -4546,7 +4555,7 @@ snapshots:
   '@farcaster/auth-client@0.5.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)':
     dependencies:
       neverthrow: 6.2.2
-      viem: 2.45.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
+      viem: 2.47.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
     transitivePeerDependencies:
       - bufferutil
       - typescript
@@ -5306,9 +5315,17 @@ snapshots:
     dependencies:
       '@types/node': 24.10.10
 
+  '@types/debug@4.1.12':
+    dependencies:
+      '@types/ms': 2.1.0
+    optional: true
+
   '@types/deep-eql@4.0.2': {}
 
   '@types/estree@1.0.8': {}
+
+  '@types/ms@2.1.0':
+    optional: true
 
   '@types/node@12.20.55': {}
 
@@ -6203,21 +6220,6 @@ snapshots:
 
   outdent@0.5.0: {}
 
-  ox@0.11.3(typescript@5.9.3)(zod@4.3.6):
-    dependencies:
-      '@adraffy/ens-normalize': 1.11.1
-      '@noble/ciphers': 1.3.0
-      '@noble/curves': 1.9.1
-      '@noble/hashes': 1.8.0
-      '@scure/bip32': 1.7.0
-      '@scure/bip39': 1.6.0
-      abitype: 1.2.3(typescript@5.9.3)(zod@4.3.6)
-      eventemitter3: 5.0.1
-    optionalDependencies:
-      typescript: 5.9.3
-    transitivePeerDependencies:
-      - zod
-
   ox@0.14.0(typescript@5.9.3)(zod@3.25.76):
     dependencies:
       '@adraffy/ens-normalize': 1.11.1
@@ -6885,23 +6887,6 @@ snapshots:
 
   varint@6.0.0: {}
 
-  viem@2.45.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6):
-    dependencies:
-      '@noble/curves': 1.9.1
-      '@noble/hashes': 1.8.0
-      '@scure/bip32': 1.7.0
-      '@scure/bip39': 1.6.0
-      abitype: 1.2.3(typescript@5.9.3)(zod@4.3.6)
-      isows: 1.0.7(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
-      ox: 0.11.3(typescript@5.9.3)(zod@4.3.6)
-      ws: 8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10)
-    optionalDependencies:
-      typescript: 5.9.3
-    transitivePeerDependencies:
-      - bufferutil
-      - utf-8-validate
-      - zod
-
   viem@2.47.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.76):
     dependencies:
       '@noble/curves': 1.9.1
@@ -6971,7 +6956,7 @@ snapshots:
       jiti: 2.6.1
       tsx: 4.21.0
 
-  vitest@3.2.4(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0):
+  vitest@3.2.4(@types/debug@4.1.12)(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0):
     dependencies:
       '@types/chai': 5.2.3
       '@vitest/expect': 3.2.4
@@ -6997,6 +6982,7 @@ snapshots:
       vite-node: 3.2.4(@types/node@24.10.10)(jiti@2.6.1)(tsx@4.21.0)
       why-is-node-running: 2.3.0
     optionalDependencies:
+      '@types/debug': 4.1.12
       '@types/node': 24.10.10
     transitivePeerDependencies:
       - jiti

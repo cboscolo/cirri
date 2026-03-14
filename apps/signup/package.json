@@ -1,0 +1,19 @@
+{
+	"name": "@getcirrus/signup",
+	"version": "0.0.1",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "wrangler dev --port 8789",
+		"deploy": "wrangler deploy"
+	},
+	"dependencies": {
+		"hono": "^4.11.3",
+		"viem": "^2.47.0"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "^4.20250313.0",
+		"typescript": "^5.9.3",
+		"wrangler": "^4.64.0"
+	}
+}

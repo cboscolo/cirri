@@ -1412,7 +1412,8 @@ function AppContent() {
 					>
 						Use your Farcaster account to join Bluesky and the AT Protocol network.
 					</p>
-				</div>
+
+					</div>
 			</div>
 		);
 	}

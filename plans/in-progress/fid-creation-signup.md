@@ -1,0 +1,133 @@
+# FID Creation & Signup for Non-Farcaster Users
+
+## Problem
+
+Today, fid.is requires users to already have a Farcaster ID (FID). This limits the audience
+to existing Farcaster users. We want to let anyone create a fid.is account — including
+people who have never used Farcaster and AI agents that need an online identity.
+
+This means we need to **create an onchain Farcaster FID** as part of the signup flow,
+then use it to create the fid.is AT Protocol account.
+
+## Architecture
+
+The signup flow is handled by a **standalone signup service** (`apps/signup/`), separate
+from the PDS. The signup service is a Hono API on Cloudflare Workers that orchestrates:
+
+1. x402 payment verification (agent path) or Privy auth (human path, not yet built)
+2. On-chain FID registration via Privy server wallet
+3. Optional fname registration
+4. PDS account creation via `ACCOUNT_CREATION_KEY`
+
+The PDS exposes `POST /xrpc/is.fid.account.create` gated by `ACCOUNT_CREATION_KEY` —
+a shared secret that authorizes the signup service to create accounts.
+
+## Decisions
+
+| Question | Decision |
+|----------|----------|
+| Signup architecture | Separate signup service (`apps/signup/`), not on the PDS |
+| Agent auth | x402 payment (USDC on Base) — payer address = custody address |
+| Human auth (planned) | Privy — SMS + Sign in with Farcaster |
+| Gas sponsorship | Privy server wallet pays gas + storage rent |
+| Agent custody model | Agent provides its own Ethereum address via x402 payer |
+| Recovery address | fid.is-controlled address (we can assist recovery) |
+| Extra storage units | Minimum 1 unit only (users buy more later) |
+| Fname for new users | Optional — agent signs EIP-712 UserNameProof, signup service registers |
+| Server-side wallet | Privy server wallets for IdGateway `registerFor()` submission |
+| Contract deployment | OP Sepolia for testing, OP Mainnet for production |
+
+## Completed Work
+
+### Agent Path (x402) — Working
+
+**Flow:**
+1. Agent fetches `GET /api/registration-params?address=0x...` — gets EIP-712 typed data, pricing, deadline
+2. Agent signs the `Register` typed data (authorizing Privy wallet to register FID on their behalf)
+3. Agent calls `POST /api/create` with `{ registerSig, deadline }` — gets 402 response
+4. Agent retries with x402 payment header (USDC on Base)
+5. Signup service verifies payment, extracts payer address
+6. If payer has no FID: Privy server wallet calls `IdGateway.registerFor()` on Optimism
+7. If payer already has FID: uses existing FID
+8. Optional: registers fname via `fnames.farcaster.xyz` API
+9. Creates PDS account via `POST /xrpc/is.fid.account.create` with `ACCOUNT_CREATION_KEY`
+10. Returns session tokens + DID + handle + FID
+
+**Files:**
+- `apps/signup/src/index.ts` — Hono app with `/api/registration-params` and `/api/create` routes
+- `apps/signup/src/x402.ts` — Custom x402 middleware (verifies payment, extracts payer address, settles after success)
+- `apps/signup/src/farcaster-contracts.ts` — Contract interactions: `getFidForAddress()`, `getIdGatewayNonce()`, `getRegistrationPrice()`, `registerForFid()` via Privy
+- `apps/signup/src/eip712.ts` — EIP-712 typed data builders for `registerFor` and fname `UserNameProof`
+- `apps/signup/src/fname.ts` — Fname registration via `fnames.farcaster.xyz` API
+- `packages/pds/src/xrpc/fid-account.ts` — `createAccount()` handler gated by `ACCOUNT_CREATION_KEY`
+- `scripts/test-agent-account.ts` — End-to-end test script (fresh wallet, USDC funding, x402 payment)
+
+**Contract config (configurable via env vars):**
+- `ID_REGISTRY_ADDRESS` — IdRegistry contract (default: OP Mainnet)
+- `ID_GATEWAY_ADDRESS` — IdGateway contract (default: OP Mainnet)
+- `CHAIN_ID` — Chain ID (default: 10 = Optimism, 11155420 = OP Sepolia for testing)
+
+**OP Sepolia test contracts:**
+- IdRegistry: `0x0acc54228887f9717633aD107FC683B4d66C6164`
+- IdGateway: `0x967e224796487113c9F268E3c73874eDBE8b73C5`
+- StorageRegistry: `0xe2Ec0AB188bE1e1A8e1B12c747653F2a648e9E90`
+- MockPriceFeed: `0x2D3F96f25eA68B15DE0330AD7A054a1070eEb53B`
+
+### PDS Account Creation Endpoint — Working
+
+- `POST /xrpc/is.fid.account.create` — accepts `{ fid, handle?, farcasterAddress? }`
+- Gated by `Authorization: Bearer <ACCOUNT_CREATION_KEY>`
+- Creates keypair, stores identity, activates account, emits identity event, registers in D1
+- Idempotent — returns tokens if account already exists
+
+### Test Infrastructure — Working
+
+- `scripts/test-agent-account.ts` — creates fresh wallet per run, funds with Base Sepolia USDC, tests full flow
+- Funder wallet transfers exact x402 price (0.01 USDC) to test wallet
+- x402 uses EIP-3009 `TransferWithAuthorization` (gasless USDC signatures)
+
+## Remaining Work
+
+### Phase 1: Human Path (Privy + Web Frontend)
+
+The signup service currently has no frontend. Needs:
+- React frontend with Privy SDK for auth (SMS + Sign in with Farcaster)
+- Signup flow UI: auth → FID creation → fname selection → account creation
+- Could be a separate app or added to `apps/signup/` as static assets
+- Deploy to `signup.fid.is`
+
+### Phase 2: Fname UX
+
+- Fname availability check endpoint/UI
+- Fname selection as part of signup flow (both human and agent paths)
+- Set fname as AT Protocol handle alongside `NNN.fid.is`
+
+### Phase 3: Production Deployment
+
+- Deploy signup service to Cloudflare Workers
+- Configure production env vars (OP Mainnet contracts, Privy prod credentials)
+- Fund Privy server wallet with OP ETH for gas + storage rent
+- Set `ACCOUNT_CREATION_KEY` on both signup service and PDS
+
+### Phase 4: Operational Polish
+
+- Privy server wallet balance monitoring + alerts
+- Rate limiting (beyond x402 payment gating)
+- Analytics and conversion tracking
+- Error recovery for failed on-chain transactions
+
+## Open Questions
+
+1. **x402 pricing**: Current price (0.01 USDC) only covers account creation overhead.
+   Should it also cover the ~$0.30 FID storage rent + gas that Privy pays? Or keep
+   the x402 price low and absorb registration costs?
+
+2. **FID confirmation latency**: Optimism block time is ~2s. We create the PDS account
+   immediately after tx inclusion (optimistic). Reorgs on OP are extremely rare but
+   technically possible.
+
+3. **Rate limiting**: x402 payment gates agents. What gates the human path beyond
+   Privy auth? Per-IP, per-phone-number limits?
+
+4. **Privy server wallet funding**: Manual top-ups vs automated monitoring + alerts?
+   Need a runbook for refilling.
