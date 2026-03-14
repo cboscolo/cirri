@@ -107,7 +107,7 @@ interface OAuthContext {
 	hostname: string;
 	domain: string;
 	accountDO: DurableObjectStub<AccountDurableObject>;
-	alchemyApiKey?: string;
+	optimismRpcUrl?: string;
 }
 
 // Type for the getAccountDO function
@@ -132,7 +132,7 @@ function getOAuthContext(
 	const handle = fidToHandle(fid, domain);
 	const accountDO = getAccountDO(env, did);
 
-	return { fid, did, handle, hostname, domain, accountDO, alchemyApiKey: env.ALCHEMY_API_KEY };
+	return { fid, did, handle, hostname, domain, accountDO, optimismRpcUrl: env.OPTIMISM_RPC_URL };
 }
 
 /**
@@ -153,9 +153,7 @@ function createProvider(ctx: OAuthContext): ATProtoOAuthProvider {
 		// SIWF (Sign In With Farcaster) authentication
 		verifySiwf: async (message: string, signature: string, fid: string, nonce: string) => {
 			try {
-				const rpcUrl = ctx.alchemyApiKey
-				? `https://opt-mainnet.g.alchemy.com/v2/${ctx.alchemyApiKey}`
-				: undefined;
+				const rpcUrl = ctx.optimismRpcUrl;
 			const appClient = createAppClient({ ethereum: viemConnector({ rpcUrl }) });
 				const verifyResult = await appClient.verifySignInMessage({
 					message,

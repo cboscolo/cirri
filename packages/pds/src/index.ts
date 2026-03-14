@@ -38,7 +38,6 @@ import * as server from "./xrpc/server";
 import * as fidAccount from "./xrpc/fid-account";
 import * as fidSettings from "./xrpc/fid-settings";
 import * as fidPasskeys from "./xrpc/fid-passkeys";
-import { x402PaymentMiddleware } from "./x402";
 import {
 	hostnameToFid,
 	fidToDid,
@@ -56,7 +55,7 @@ const pdsEnv = env as unknown as PDSEnv;
 
 function validateEnv(env: PDSEnv): void {
 	// Always required (strings)
-	const required = ["WEBFID_DOMAIN", "JWT_SECRET", "QUICKAUTH_DOMAIN", "ALCHEMY_API_KEY"] as const;
+	const required = ["WEBFID_DOMAIN", "JWT_SECRET", "QUICKAUTH_DOMAIN", "OPTIMISM_RPC_URL"] as const;
 	for (const key of required) {
 		if (!env[key]) {
 			throw new Error(`Missing required environment variable: ${key}`);
@@ -68,15 +67,6 @@ function validateEnv(env: PDSEnv): void {
 		throw new Error("Missing required R2 binding: BLOBS");
 	}
 
-	// x402 group: if any is set, all must be set
-	const x402Group = ["X402_FACILITATOR_URL", "X402_PRICE", "X402_PAY_TO", "OPTIMISM_RPC_URL"] as const;
-	const x402Set = x402Group.filter((k) => env[k]);
-	if (x402Set.length > 0 && x402Set.length < x402Group.length) {
-		const missing = x402Group.filter((k) => !env[k]);
-		throw new Error(
-			`Incomplete x402 configuration: have ${x402Set.join(", ")} but missing ${missing.join(", ")}`,
-		);
-	}
 }
 
 validateEnv(pdsEnv);
@@ -401,11 +391,9 @@ app.post("/xrpc/is.fid.account.createSiwf", (c) =>
 	fidAccount.createAccountSiwf(c, getAccountDO),
 );
 
-// Create account via x402 payment
-app.post(
-	"/xrpc/is.fid.account.createX402",
-	x402PaymentMiddleware(),
-	(c: any) => fidAccount.createAccountX402(c, getAccountDO, c.get("x402Payer")),
+// Create account via internal API key (used by signup service)
+app.post("/xrpc/is.fid.account.create", (c) =>
+	fidAccount.createAccount(c, getAccountDO),
 );
 
 // Delete account (requires auth)

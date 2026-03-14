@@ -18,7 +18,6 @@ import type { AccountDurableObject } from "../account-do";
 import { registerUser, deleteUser, isAllowed, isWaitlisted, joinWaitlist as joinWaitlistDb } from "../user-registry";
 import { didToFid } from "../farcaster-auth";
 import type { AuthedAppEnv } from "../types";
-import { getCustodyAddress } from "../farcaster-contracts";
 
 /** Function type for getting Account DO by DID */
 type GetAccountDO = (
@@ -299,11 +298,9 @@ export async function loginFarcasterMini(
 async function verifySiwfCredentials(
 	body: { message: string; signature: `0x${string}`; fid: string; nonce: string },
 	domain: string,
-	alchemyApiKey?: string,
+	optimismRpcUrl?: string,
 ): Promise<{ fid: string; farcasterAddress?: string }> {
-	const rpcUrl = alchemyApiKey
-		? `https://opt-mainnet.g.alchemy.com/v2/${alchemyApiKey}`
-		: undefined;
+	const rpcUrl = optimismRpcUrl;
 	const appClient = createAppClient({
 		ethereum: viemConnector({ rpcUrl }),
 	});
@@ -430,7 +427,7 @@ export async function loginSiwf(
 
 	let fid: string;
 	try {
-		({ fid } = await verifySiwfCredentials(body!, domain, c.env.ALCHEMY_API_KEY));
+		({ fid } = await verifySiwfCredentials(body!, domain, c.env.OPTIMISM_RPC_URL));
 	} catch (err) {
 		if (err instanceof SiwfError) {
 			return c.json({ error: err.code, message: err.message }, err.status as any);
@@ -486,7 +483,7 @@ export async function createAccountSiwf(
 	let fid: string;
 	let farcasterAddress: string | undefined;
 	try {
-		({ fid, farcasterAddress } = await verifySiwfCredentials(body!, domain, c.env.ALCHEMY_API_KEY));
+		({ fid, farcasterAddress } = await verifySiwfCredentials(body!, domain, c.env.OPTIMISM_RPC_URL));
 	} catch (err) {
 		if (err instanceof SiwfError) {
 			return c.json({ error: err.code, message: err.message }, err.status as any);
@@ -525,22 +522,44 @@ export async function createAccountSiwf(
 }
 
 /**
- * Create a new account for an AI agent via x402 payment.
+ * Create a new account via internal API key authentication.
  *
- * POST /xrpc/is.fid.account.createX402
- * Input: { fid: string }
- * Auth: x402 payment — payer address must match the FID's custody address
+ * POST /xrpc/is.fid.account.create
+ * Input: { fid: string, handle?: string, farcasterAddress?: string }
+ * Auth: Authorization: Bearer <ACCOUNT_CREATION_KEY>
  *
- * The x402 payment serves dual purpose:
- * 1. Spam prevention (agent pays USDC)
- * 2. FID ownership proof (payer address === custody address on Optimism IdRegistry)
+ * Used by trusted internal services (e.g., signup service) to create accounts
+ * after they've handled their own authentication (x402, on-chain FID registration, etc.).
  */
-export async function createAccountX402(
+export async function createAccount(
 	c: Context<AppEnv>,
 	getAccountDO: GetAccountDO,
-	payerAddress: string,
 ): Promise<Response> {
-	const body = await c.req.json<{ fid: string }>().catch(() => null);
+	// Verify ACCOUNT_CREATION_KEY is configured
+	if (!c.env.ACCOUNT_CREATION_KEY) {
+		return c.json(
+			{ error: "ServerError", message: "API key auth not configured" },
+			501,
+		);
+	}
+
+	// Verify API key from Authorization header
+	const auth = c.req.header("Authorization");
+	if (!auth?.startsWith("Bearer ")) {
+		return c.json(
+			{ error: "AuthenticationRequired", message: "Missing Authorization header" },
+			401,
+		);
+	}
+	const apiKey = auth.slice(7);
+	if (apiKey !== c.env.ACCOUNT_CREATION_KEY) {
+		return c.json(
+			{ error: "AuthenticationRequired", message: "Invalid API key" },
+			401,
+		);
+	}
+
+	const body = await c.req.json<{ fid: string; handle?: string; farcasterAddress?: string }>().catch(() => null);
 
 	if (!body?.fid || !/^[1-9]\d*$/.test(body.fid)) {
 		return c.json(
@@ -552,43 +571,9 @@ export async function createAccountX402(
 		);
 	}
 
-	const fid = body.fid;
-
-	// Verify the x402 payer owns this FID by checking the IdRegistry custody address.
-	let custodyAddress: string;
-	try {
-		custodyAddress = await getCustodyAddress(fid, c.env.OPTIMISM_RPC_URL);
-	} catch (err) {
-		return c.json(
-			{
-				error: "ServerError",
-				message: "Failed to read IdRegistry",
-			},
-			502,
-		);
-	}
-
-	// Zero address means FID doesn't exist
-	if (custodyAddress === "0x0000000000000000000000000000000000000000") {
-		return c.json(
-			{ error: "InvalidRequest", message: "FID does not exist" },
-			400,
-		);
-	}
-
-	// Verify payer === custody address (case-insensitive hex comparison)
-	if (payerAddress.toLowerCase() !== custodyAddress.toLowerCase()) {
-		return c.json(
-			{
-				error: "Forbidden",
-				message: "Payment address does not match FID custody address",
-			},
-			403,
-		);
-	}
-
-	const result = await createAccountForFid(fid, c.env, getAccountDO, {
-		farcasterAddress: payerAddress,
+	const result = await createAccountForFid(body.fid, c.env, getAccountDO, {
+		handle: body.handle,
+		farcasterAddress: body.farcasterAddress,
 	});
 
 	return c.json({
@@ -694,7 +679,7 @@ export async function joinWaitlist(
 			({ fid, farcasterAddress } = await verifySiwfCredentials(
 				body as { message: string; signature: `0x${string}`; fid: string; nonce: string },
 				domain,
-				c.env.ALCHEMY_API_KEY,
+				c.env.OPTIMISM_RPC_URL,
 			));
 		} catch (err) {
 			if (err instanceof SiwfError) {

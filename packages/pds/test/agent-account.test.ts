@@ -17,23 +17,75 @@ function agentUrl(fid: string, path: string): string {
 	return `http://${fid}.${env.WEBFID_DOMAIN}${path}`;
 }
 
-describe("is.fid.account.createX402", () => {
-	it("returns 402 with payment requirements when no payment header is provided", async () => {
-		// Without x402 env vars, the middleware still returns 402 (payment required)
-		// since env validation is now at module load, not per-request
+describe("is.fid.account.create", () => {
+	it("returns 401 when no Authorization header is provided", async () => {
 		const response = await worker.fetch(
-			new Request(agentUrl(TEST_FID, "/xrpc/is.fid.account.createX402"), {
+			new Request(agentUrl("77777", "/xrpc/is.fid.account.create"), {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ fid: TEST_FID }),
+				body: JSON.stringify({ fid: "77777" }),
 			}),
 			env,
 		);
 
-		expect(response.status).toBe(402);
+		expect(response.status).toBe(401);
 		const body = (await response.json()) as Record<string, unknown>;
-		expect(body.x402Version).toBe(1);
-		expect(body.accepts).toBeDefined();
+		expect(body.error).toBe("AuthenticationRequired");
+	});
+
+	it("returns 401 when API key is invalid", async () => {
+		const response = await worker.fetch(
+			new Request(agentUrl("77777", "/xrpc/is.fid.account.create"), {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Authorization: "Bearer wrong-key",
+				},
+				body: JSON.stringify({ fid: "77777" }),
+			}),
+			env,
+		);
+
+		expect(response.status).toBe(401);
+	});
+
+	it("returns 400 when fid is missing", async () => {
+		const response = await worker.fetch(
+			new Request(agentUrl("77777", "/xrpc/is.fid.account.create"), {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Authorization: `Bearer ${env.ACCOUNT_CREATION_KEY}`,
+				},
+				body: JSON.stringify({}),
+			}),
+			env,
+		);
+
+		expect(response.status).toBe(400);
+	});
+
+	it("creates an account with valid API key", async () => {
+		const fid = "88888";
+		const response = await worker.fetch(
+			new Request(agentUrl(fid, "/xrpc/is.fid.account.create"), {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Authorization: `Bearer ${env.ACCOUNT_CREATION_KEY}`,
+				},
+				body: JSON.stringify({ fid, farcasterAddress: "0x1234567890abcdef1234567890abcdef12345678" }),
+			}),
+			env,
+		);
+
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as Record<string, unknown>;
+		expect(body.fid).toBe(fid);
+		expect(body.did).toBe(`did:web:${fid}.${env.WEBFID_DOMAIN}`);
+		expect(body.accessJwt).toBeDefined();
+		expect(body.refreshJwt).toBeDefined();
+		expect(body.active).toBe(true);
 	});
 });
 
