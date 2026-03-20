@@ -16,11 +16,17 @@ from the PDS. The signup service is a Hono API on Cloudflare Workers that orches
 
 1. x402 payment verification (agent path) or Privy auth (human path, not yet built)
 2. On-chain FID registration via Privy server wallet
-3. Optional fname registration
-4. PDS account creation via `ACCOUNT_CREATION_KEY`
+3. Farcaster signer key registration via KeyGateway (key generated/stored by sync service)
+4. Optional fname registration
+5. PDS account creation via `ACCOUNT_CREATION_KEY`
+6. Sync service setup (moves signer key to FID-keyed storage)
 
 The PDS exposes `POST /xrpc/is.fid.account.create` gated by `ACCOUNT_CREATION_KEY` —
 a shared secret that authorizes the signup service to create accounts.
+
+The **sync service** (`apps/sync/`) generates and stores Farcaster signer keys. The
+signer private key never leaves the sync service — it's encrypted with AES-256-GCM and
+stored in a per-FID Durable Object.
 
 ## Decisions
 
@@ -36,22 +42,28 @@ a shared secret that authorizes the signup service to create accounts.
 | Fname for new users | Optional — agent signs EIP-712 UserNameProof, signup service registers |
 | Server-side wallet | Privy server wallets for IdGateway `registerFor()` submission |
 | Contract deployment | OP Sepolia for testing, OP Mainnet for production |
+| Signer key custody | Sync service generates + stores encrypted; private key never exposed to client |
+| Signer key registration | KeyGateway `addFor()` via Privy server wallet during signup |
 
 ## Completed Work
 
 ### Agent Path (x402) — Working
 
 **Flow:**
-1. Agent fetches `GET /api/registration-params?address=0x...` — gets EIP-712 typed data, pricing, deadline
-2. Agent signs the `Register` typed data (authorizing Privy wallet to register FID on their behalf)
-3. Agent calls `POST /api/create` with `{ registerSig, deadline }` — gets 402 response
+1. Agent fetches `GET /api/registration-params?address=0x...`
+   - Signup calls sync service `POST /generate-signer` — generates ed25519 keypair, stores encrypted private key
+   - Returns EIP-712 typed data for both `Register` and `Add` (signer), pricing, deadline
+2. Agent signs both `Register` and `Add` typed data
+3. Agent calls `POST /api/create` with `{ registerSig, addSig, signerPubKey, signerMetadata, deadline }` — gets 402 response
 4. Agent retries with x402 payment header (USDC on Base)
 5. Signup service verifies payment, extracts payer address
 6. If payer has no FID: Privy server wallet calls `IdGateway.registerFor()` on Optimism
 7. If payer already has FID: uses existing FID
-8. Optional: registers fname via `fnames.farcaster.xyz` API
-9. Creates PDS account via `POST /xrpc/is.fid.account.create` with `ACCOUNT_CREATION_KEY`
-10. Returns session tokens + DID + handle + FID
+8. Privy server wallet calls `KeyGateway.addFor()` to register signer key on-chain
+9. Optional: registers fname via `fnames.farcaster.xyz` API
+10. Creates PDS account via `POST /xrpc/is.fid.account.create` with `ACCOUNT_CREATION_KEY`
+11. Calls sync service `POST /setup` — moves pending signer key to FID-keyed storage
+12. Returns session tokens + DID + handle + FID + signerPubKey (no private key)
 
 **Files:**
 - `apps/signup/src/index.ts` — Hono app with `/api/registration-params` and `/api/create` routes
@@ -79,6 +91,24 @@ a shared secret that authorizes the signup service to create accounts.
 - Gated by `Authorization: Bearer <ACCOUNT_CREATION_KEY>`
 - Creates keypair, stores identity, activates account, emits identity event, registers in D1
 - Idempotent — returns tokens if account already exists
+
+### Signer Key Management — Working
+
+Signer keys are generated and stored by the **sync service** (`apps/sync/`), never
+exposed to the client:
+
+1. Signup service calls `POST /generate-signer` on sync service with the agent's address
+2. Sync service generates ed25519 keypair, encrypts private key with AES-256-GCM, stores in
+   a pending DO keyed by `pending:${address}`, returns only the public key
+3. Signup service builds EIP-712 `Add` typed data with the public key, agent signs it
+4. After FID registration + on-chain signer registration, signup calls `POST /setup` on sync service
+5. Sync service moves the encrypted key from the pending DO to the FID-keyed DO (`fid:${fid}`)
+6. The signer private key never leaves the sync service
+
+**Files:**
+- `apps/sync/src/sync-do.ts` — `generateSigner()`, `getPendingSignerKey()`, `setupWithEncryptedKey()`
+- `apps/sync/src/crypto.ts` — AES-256-GCM encryption/decryption
+- `apps/sync/src/index.ts` — `POST /generate-signer`, `POST /setup` endpoints
 
 ### Test Infrastructure — Working
 

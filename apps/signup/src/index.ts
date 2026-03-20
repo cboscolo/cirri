@@ -15,13 +15,16 @@ import {
 	resolveContractConfig,
 	getFidForAddress,
 	getIdGatewayNonce,
+	getKeyGatewayNonce,
 	getRegistrationPrice,
 	registerForFid,
+	addSignerForFid,
 } from "./farcaster-contracts";
 import {
 	buildRegisterTypedData,
-	buildRegisterDomain,
-	REGISTER_TYPES,
+	buildAddTypedData,
+	buildSignedKeyRequestDomain,
+	SIGNED_KEY_REQUEST_TYPES,
 	FNAME_DOMAIN,
 	FNAME_TYPES,
 } from "./eip712";
@@ -59,8 +62,20 @@ export type Env = {
 		ID_REGISTRY_ADDRESS?: string;
 		/** Override IdGateway address (default: OP mainnet) */
 		ID_GATEWAY_ADDRESS?: string;
+		/** Override KeyGateway address (default: OP mainnet) */
+		KEY_GATEWAY_ADDRESS?: string;
+		/** Override SignedKeyRequestValidator address (default: OP mainnet) */
+		SIGNED_KEY_REQUEST_VALIDATOR_ADDRESS?: string;
 		/** Override chain ID for contract interactions (default: 10 = Optimism) */
 		CHAIN_ID?: string;
+		/** FID of the requesting app (fid.is miniapp) for SignedKeyRequest metadata */
+		REQUEST_FID?: string;
+		/** Private key of the REQUEST_FID owner for signing SignedKeyRequest metadata */
+		REQUEST_FID_PRIVATE_KEY?: string;
+		/** Sync service URL (e.g., https://sync.fid.is) */
+		SYNC_SERVICE_URL: string;
+		/** Sync service internal API key */
+		SYNC_API_KEY: string;
 	};
 };
 
@@ -72,6 +87,56 @@ app.onError((err, c) => {
 });
 
 app.use("*", cors({ origin: "*" }));
+
+/**
+ * Call the sync service to generate a signer keypair.
+ * The private key is stored encrypted in the sync service — only the public key is returned.
+ */
+async function generateSignerViaSyncService(
+	syncUrl: string,
+	syncApiKey: string,
+	address: string,
+): Promise<{ signerPublicKey: string }> {
+	const resp = await fetch(`${syncUrl}/generate-signer`, {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			Authorization: `Bearer ${syncApiKey}`,
+		},
+		body: JSON.stringify({ address }),
+	});
+
+	if (!resp.ok) {
+		const err = await resp.text();
+		throw new Error(`Sync service generate-signer failed (${resp.status}): ${err}`);
+	}
+
+	return resp.json() as Promise<{ signerPublicKey: string }>;
+}
+
+/**
+ * Call the sync service to set up sync for a user.
+ * Moves the pending signer key to the FID-keyed DO.
+ */
+async function setupSyncService(
+	syncUrl: string,
+	syncApiKey: string,
+	params: { fid: number; did: string; pdsUrl: string; address: string; signerPublicKey: string },
+): Promise<void> {
+	const resp = await fetch(`${syncUrl}/setup`, {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			Authorization: `Bearer ${syncApiKey}`,
+		},
+		body: JSON.stringify(params),
+	});
+
+	if (!resp.ok) {
+		const err = await resp.text();
+		throw new Error(`Sync service setup failed (${resp.status}): ${err}`);
+	}
+}
 
 /**
  * GET /api/registration-params?address=0x...
@@ -89,11 +154,16 @@ app.get("/api/registration-params", async (c) => {
 	const client = createChainClient(c.env.OPTIMISM_RPC_URL, contracts.chainId);
 	const addr = address as Address;
 
-	// Fetch nonce and price in parallel
-	const [nonce, priceWei, existingFid] = await Promise.all([
+	// Fetch nonces, price, existing FID, and generate signer key in parallel
+	const [registerNonce, keyGatewayNonce, priceWei, existingFid, signerResult] = await Promise.all([
 		getIdGatewayNonce(client, addr, contracts),
+		getKeyGatewayNonce(client, addr, contracts),
 		getRegistrationPrice(client, contracts),
 		getFidForAddress(client, addr, contracts),
+		// Generate signer keypair in the sync service (private key stays there)
+		c.env.REQUEST_FID && c.env.REQUEST_FID_PRIVATE_KEY
+			? generateSignerViaSyncService(c.env.SYNC_SERVICE_URL, c.env.SYNC_API_KEY, address)
+			: Promise.resolve(null),
 	]);
 
 	// Deadline: 1 hour from now
@@ -103,11 +173,77 @@ app.get("/api/registration-params", async (c) => {
 	const registerTypedData = buildRegisterTypedData({
 		to: addr,
 		recovery,
-		nonce,
+		nonce: registerNonce,
 		deadline,
 		idGateway: contracts.idGateway,
 		chainId: contracts.chainId,
 	});
+
+	// Build Add typed data if signer was generated
+	let addTypedData = null;
+	let signerKeyInfo = null;
+
+	if (signerResult && c.env.REQUEST_FID && c.env.REQUEST_FID_PRIVATE_KEY) {
+		const { privateKeyToAccount } = await import("viem/accounts");
+		const { encodeAbiParameters } = await import("viem");
+
+		const signerPubKeyHex = `0x${signerResult.signerPublicKey}` as `0x${string}`;
+		const requestFid = BigInt(c.env.REQUEST_FID);
+		const requestAccount = privateKeyToAccount(c.env.REQUEST_FID_PRIVATE_KEY as `0x${string}`);
+
+		// Sign the SignedKeyRequest EIP-712 message
+		const signedKeyRequestDomain = buildSignedKeyRequestDomain(
+			contracts.signedKeyRequestValidator,
+			contracts.chainId,
+		);
+
+		const signedKeyRequestSig = await requestAccount.signTypedData({
+			domain: signedKeyRequestDomain,
+			types: SIGNED_KEY_REQUEST_TYPES,
+			primaryType: "SignedKeyRequest",
+			message: {
+				requestFid,
+				key: signerPubKeyHex,
+				deadline,
+			},
+		});
+
+		// ABI-encode the SignedKeyRequestMetadata struct
+		const metadata = encodeAbiParameters(
+			[{
+				type: "tuple",
+				components: [
+					{ name: "requestFid", type: "uint256" },
+					{ name: "requestSigner", type: "address" },
+					{ name: "signature", type: "bytes" },
+					{ name: "deadline", type: "uint256" },
+				],
+			}],
+			[{
+				requestFid,
+				requestSigner: requestAccount.address,
+				signature: signedKeyRequestSig,
+				deadline,
+			}],
+		);
+
+		addTypedData = buildAddTypedData({
+			owner: addr,
+			keyType: 1, // ed25519
+			key: signerPubKeyHex,
+			metadataType: 1, // SignedKeyRequest
+			metadata,
+			nonce: keyGatewayNonce,
+			deadline,
+			keyGateway: contracts.keyGateway,
+			chainId: contracts.chainId,
+		});
+
+		signerKeyInfo = {
+			signerPubKey: signerPubKeyHex,
+			metadata,
+		};
+	}
 
 	// For fname, we build a template — the agent fills in `name` and `timestamp`
 	// before signing. We provide the domain and types so they know the format.
@@ -126,11 +262,14 @@ app.get("/api/registration-params", async (c) => {
 			fidEth: priceEth,
 		},
 		existingFid: existingFid !== "0" ? existingFid : null,
-		nonce: nonce.toString(),
+		nonce: registerNonce.toString(),
 		deadline: deadline.toString(),
 		recoveryAddress: recovery,
 		registerTypedData,
 		fnameTypedData,
+		// Signer key registration (null if REQUEST_FID not configured)
+		addTypedData,
+		signerKeyInfo,
 	});
 });
 
@@ -140,9 +279,11 @@ app.get("/api/registration-params", async (c) => {
  * x402-gated endpoint that:
  * 1. Verifies payment, extracts payer address
  * 2. Registers FID on-chain (if payer doesn't already have one)
- * 3. Registers fname (if provided)
- * 4. Creates PDS account via internal API key
- * 5. Returns the complete account info
+ * 3. Registers signer key on-chain (if addSig provided)
+ * 4. Registers fname (if provided)
+ * 5. Creates PDS account via internal API key
+ * 6. Sets up sync service (moves signer key to FID-keyed storage)
+ * 7. Returns the complete account info
  */
 app.post("/api/create", x402PaymentMiddleware(), async (c) => {
 	const payerAddress = (c as any).get("x402Payer") as string;
@@ -156,6 +297,10 @@ app.post("/api/create", x402PaymentMiddleware(), async (c) => {
 		fnameSig?: string;
 		fnameTimestamp?: number;
 		deadline?: string;
+		// Signer key registration fields
+		addSig?: string;
+		signerPubKey?: string;
+		signerMetadata?: string;
 	}>().catch(() => null);
 
 	const contracts = resolveContractConfig(c.env);
@@ -205,7 +350,35 @@ app.post("/api/create", x402PaymentMiddleware(), async (c) => {
 		fid = result.fid;
 	}
 
-	// Step 3: Register fname (if provided)
+	// Step 3: Register signer key on-chain (if addSig provided)
+	let signerPubKey: string | undefined;
+	if (body?.addSig && body?.signerPubKey && body?.signerMetadata && body?.deadline) {
+		try {
+			await addSignerForFid({
+				client,
+				config: contracts,
+				fidOwner: payerAddress as Address,
+				keyType: 1, // ed25519
+				key: body.signerPubKey as `0x${string}`,
+				metadataType: 1, // SignedKeyRequest
+				metadata: body.signerMetadata as `0x${string}`,
+				deadline: BigInt(body.deadline),
+				signature: body.addSig as `0x${string}`,
+				privyAppId: c.env.PRIVY_APP_ID,
+				privyAppSecret: c.env.PRIVY_APP_SECRET,
+				privyWalletId: c.env.PRIVY_SERVER_WALLET_ID,
+			});
+			signerPubKey = body.signerPubKey;
+		} catch (err) {
+			const message = err instanceof Error ? err.message : "Unknown error";
+			return c.json(
+				{ error: "SignerRegistrationFailed", message: `Signer key registration failed: ${message}` },
+				502,
+			);
+		}
+	}
+
+	// Step 4: Register fname (if provided)
 	let handle: string | undefined;
 	if (body?.fname && body?.fnameSig && body?.fnameTimestamp) {
 		try {
@@ -223,8 +396,7 @@ app.post("/api/create", x402PaymentMiddleware(), async (c) => {
 		}
 	}
 
-	// Step 4: Create PDS account via internal API key
-	// The create endpoint reads FID from the request body, so we don't need subdomain routing.
+	// Step 5: Create PDS account via internal API key
 	const pdsBaseUrl = c.env.PDS_URL.replace(/\/$/, "");
 	const accountUrl = `${pdsBaseUrl}/xrpc/is.fid.account.create`;
 
@@ -249,7 +421,28 @@ app.post("/api/create", x402PaymentMiddleware(), async (c) => {
 		);
 	}
 
-	const pdsResult = await pdsResp.json();
+	const pdsResult = (await pdsResp.json()) as Record<string, unknown>;
+
+	// Step 6: Set up sync service — move pending signer key to FID-keyed storage
+	if (signerPubKey) {
+		try {
+			const did = pdsResult.did as string;
+			const pdsUrl = `https://${fid}.${c.env.PDS_URL.replace(/^https?:\/\//, "").replace(/\/$/, "")}`;
+
+			await setupSyncService(c.env.SYNC_SERVICE_URL, c.env.SYNC_API_KEY, {
+				fid: parseInt(fid, 10),
+				did,
+				pdsUrl,
+				address: payerAddress,
+				signerPublicKey: signerPubKey.startsWith("0x") ? signerPubKey.slice(2) : signerPubKey,
+			});
+		} catch (err) {
+			// Log but don't fail — the account and signer are created, sync can be retried
+			console.error("Sync service setup failed:", err);
+		}
+
+		pdsResult.signerPubKey = signerPubKey;
+	}
 
 	return c.json(pdsResult);
 });

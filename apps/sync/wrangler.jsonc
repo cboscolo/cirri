@@ -1,0 +1,33 @@
+{
+	"name": "sync",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-12-02",
+	"compatibility_flags": ["nodejs_compat"],
+	"workers_dev": false,
+	"preview_urls": false,
+	"vars": {
+		"HUB_API_URL": "https://haatz.quilibrium.com/v1",
+		"PDS_DOMAIN": "fid.is"
+		// Secrets (set via `wrangler secret put`):
+		// SIGNER_ENCRYPTION_KEY — AES-256 symmetric key for encrypting signer keys
+		// INTERNAL_API_KEY — for setup/status/enable/disable endpoints
+		// JWT_SECRET — for verifying user access JWTs on POST /sync
+	},
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "SYNC_DO",
+				"class_name": "SyncDurableObject"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["SyncDurableObject"]
+		}
+	],
+	"routes": [
+		{ "pattern": "sync.fid.is/*", "zone_name": "fid.is" }
+	]
+}

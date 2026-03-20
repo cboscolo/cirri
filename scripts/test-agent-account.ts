@@ -51,6 +51,7 @@ interface TestWallet {
 	privateKey: string;
 	address: string;
 	fid?: string;
+	signerPubKey?: string;
 	createdAt: string;
 }
 
@@ -196,23 +197,31 @@ if (!paramsResp.ok) {
 	process.exit(1);
 }
 
+interface TypedData {
+	domain: { name: string; version: string; chainId: number; verifyingContract: string };
+	types: Record<string, Array<{ name: string; type: string }>>;
+	primaryType: string;
+	message: Record<string, unknown>;
+}
+
 const regParams = await paramsResp.json() as {
 	price: { fidWei: string; fidEth: number };
 	existingFid: string | null;
 	nonce: string;
 	deadline: string;
 	recoveryAddress: string;
-	registerTypedData: {
-		domain: { name: string; version: string; chainId: number; verifyingContract: string };
-		types: Record<string, Array<{ name: string; type: string }>>;
-		primaryType: string;
-		message: Record<string, unknown>;
-	};
+	registerTypedData: TypedData;
+	addTypedData: TypedData | null;
+	signerKeyInfo: {
+		signerPubKey: string;
+		metadata: string;
+	} | null;
 };
 
 console.log(`Registration price: ${regParams.price.fidEth} ETH (${regParams.price.fidWei} wei)`);
 console.log(`Existing FID: ${regParams.existingFid || "none"}`);
-console.log(`Deadline: ${regParams.deadline}\n`);
+console.log(`Deadline: ${regParams.deadline}`);
+console.log(`Signer key: ${regParams.signerKeyInfo ? regParams.signerKeyInfo.signerPubKey.slice(0, 20) + "..." : "not configured"}\n`);
 
 // --- Step 5: Sign the EIP-712 registerFor data (if no existing FID) ---
 let registerSig: string | undefined;
@@ -230,10 +239,37 @@ if (!regParams.existingFid) {
 	});
 
 	deadline = regParams.deadline;
-	console.log(`Signature: ${registerSig.slice(0, 20)}...`);
+	console.log(`Register signature: ${registerSig.slice(0, 20)}...`);
 	console.log();
 } else {
 	console.log("--- Step 5: Skip signing (wallet already has FID) ---\n");
+}
+
+// --- Step 5b: Sign the EIP-712 Add data (signer key registration) ---
+let addSig: string | undefined;
+let signerPubKey: string | undefined;
+let signerMetadata: string | undefined;
+
+if (regParams.addTypedData && regParams.signerKeyInfo) {
+	console.log("--- Step 5b: Sign EIP-712 Add data (signer key) ---");
+	const { domain, types, message } = regParams.addTypedData;
+
+	addSig = await account.signTypedData({
+		domain: domain as any,
+		types: types as any,
+		primaryType: "Add",
+		message: message as any,
+	});
+
+	signerPubKey = regParams.signerKeyInfo.signerPubKey;
+	signerMetadata = regParams.signerKeyInfo.metadata;
+
+	console.log(`Add signature: ${addSig.slice(0, 20)}...`);
+	console.log(`Signer pub key: ${signerPubKey.slice(0, 20)}...`);
+	console.log(`(private key stored encrypted in sync service)`);
+	console.log();
+} else {
+	console.log("--- Step 5b: Skip signer (REQUEST_FID not configured on server) ---\n");
 }
 
 // --- Step 6: Call signup service without payment → expect 402 ---
@@ -243,6 +279,9 @@ const url = `${SIGNUP_URL}/api/create`;
 const createBody = {
 	...(registerSig && { registerSig }),
 	...(deadline && { deadline }),
+	...(addSig && { addSig }),
+	...(signerPubKey && { signerPubKey }),
+	...(signerMetadata && { signerMetadata }),
 };
 
 const resp1 = await fetch(url, {
@@ -321,14 +360,42 @@ if (resp2.status === 200) {
 	console.log(`  DID:    ${body2.did}`);
 	console.log(`  Handle: ${body2.handle}`);
 	console.log(`  FID:    ${body2.fid || newFid.toString()}`);
+	if (body2.signerPubKey) {
+		console.log(`  Signer: ${body2.signerPubKey.slice(0, 20)}...`);
+		console.log(`  ✓ Farcaster signer key registered on-chain`);
+		console.log(`  ✓ Signer private key stored encrypted in sync service`);
+	}
 
-	// Save wallet with FID
+	// Verify signer key on-chain if it was registered
+	if (body2.signerPubKey) {
+		console.log("\n--- Verify signer on-chain ---");
+		const KEY_REGISTRY = "0xdE976C4DCF2e723FF34b0A1EaD5c6540c4cd1B47" as const;
+		const assignedFid = body2.fid || newFid.toString();
+
+		const keyState = await opSepoliaClient.readContract({
+			address: KEY_REGISTRY,
+			abi: [parseAbiItem("function keyDataOf(uint256 fid, bytes key) view returns (uint8 state, uint32 keyType)")],
+			functionName: "keyDataOf",
+			args: [BigInt(assignedFid), body2.signerPubKey as `0x${string}`],
+		});
+
+		const stateNames = ["NULL", "ADDED", "REMOVED"];
+		console.log(`  KeyRegistry state: ${stateNames[keyState[0]] || keyState[0]} (keyType: ${keyState[1]})`);
+		if (keyState[0] === 1) {
+			console.log(`  ✓ Signer key is ADDED in KeyRegistry`);
+		} else {
+			console.log(`  ✗ Signer key state is not ADDED (got ${keyState[0]})`);
+		}
+	}
+
+	// Save wallet with FID and signer info
 	const wallets = loadWallets();
 	const entry: TestWallet = {
 		privateKey: newPrivateKey,
 		address: account.address,
 		fid: (body2.fid || newFid.toString()),
 		createdAt: new Date().toISOString(),
+		...(body2.signerPubKey && { signerPubKey: body2.signerPubKey }),
 	};
 	wallets.wallets.push(entry);
 	saveWallets(wallets);

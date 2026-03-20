@@ -9,10 +9,12 @@
 		"OPTIMISM_RPC_URL": "https://mainnet.optimism.io",
 		"PDS_URL": "https://fid.is",
 		"X402_PRICE": "10000",
-		"X402_FACILITATOR_URL": "https://x402.org/facilitator"
+		"X402_FACILITATOR_URL": "https://x402.org/facilitator",
+		"SYNC_SERVICE_URL": "https://sync.fid.is"
 		// Secrets (set via `wrangler secret put`):
 		// PDS_API_KEY, X402_PAY_TO, RECOVERY_ADDRESS
 		// PRIVY_APP_ID, PRIVY_APP_SECRET, PRIVY_SERVER_WALLET_ID, PRIVY_SERVER_WALLET_ADDRESS
+		// SYNC_API_KEY — matches INTERNAL_API_KEY on sync service
 	},
 	"routes": [
 		{ "pattern": "signup.fid.is/*", "zone_name": "fid.is" }

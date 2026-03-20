@@ -20,6 +20,8 @@ import { optimism, optimismSepolia } from "viem/chains";
 /** Default Farcaster contract addresses (Optimism mainnet) */
 const DEFAULT_ID_REGISTRY = "0x00000000Fc6c5F01Fc30151999387Bb99A9f489b" as const;
 const DEFAULT_ID_GATEWAY = "0x00000000fc25870c6ed6b6c7e41fb078b7656f69" as const;
+const DEFAULT_KEY_GATEWAY = "0x00000000fc56947c7e7183f8ca4b62398caadf0b" as const;
+const DEFAULT_SIGNED_KEY_REQUEST_VALIDATOR = "0x00000000FC700472606ED4fA22623Acf62c60553" as const;
 
 /** Minimal ABI for IdRegistry reads */
 const idRegistryAbi = [
@@ -65,10 +67,38 @@ const idGatewayAbi = [
 	},
 ] as const;
 
+/** Minimal ABI for KeyGateway addFor and nonces */
+const keyGatewayAbi = [
+	{
+		name: "addFor",
+		type: "function",
+		stateMutability: "nonpayable",
+		inputs: [
+			{ name: "fidOwner", type: "address" },
+			{ name: "keyType", type: "uint32" },
+			{ name: "key", type: "bytes" },
+			{ name: "metadataType", type: "uint8" },
+			{ name: "metadata", type: "bytes" },
+			{ name: "deadline", type: "uint256" },
+			{ name: "sig", type: "bytes" },
+		],
+		outputs: [],
+	},
+	{
+		name: "nonces",
+		type: "function",
+		stateMutability: "view",
+		inputs: [{ name: "owner", type: "address" }],
+		outputs: [{ name: "", type: "uint256" }],
+	},
+] as const;
+
 /** Contract configuration resolved from env vars */
 export interface ContractConfig {
 	idRegistry: Address;
 	idGateway: Address;
+	keyGateway: Address;
+	signedKeyRequestValidator: Address;
 	chainId: number;
 }
 
@@ -76,11 +106,15 @@ export interface ContractConfig {
 export function resolveContractConfig(env: {
 	ID_REGISTRY_ADDRESS?: string;
 	ID_GATEWAY_ADDRESS?: string;
+	KEY_GATEWAY_ADDRESS?: string;
+	SIGNED_KEY_REQUEST_VALIDATOR_ADDRESS?: string;
 	CHAIN_ID?: string;
 }): ContractConfig {
 	return {
 		idRegistry: (env.ID_REGISTRY_ADDRESS || DEFAULT_ID_REGISTRY) as Address,
 		idGateway: (env.ID_GATEWAY_ADDRESS || DEFAULT_ID_GATEWAY) as Address,
+		keyGateway: (env.KEY_GATEWAY_ADDRESS || DEFAULT_KEY_GATEWAY) as Address,
+		signedKeyRequestValidator: (env.SIGNED_KEY_REQUEST_VALIDATOR_ADDRESS || DEFAULT_SIGNED_KEY_REQUEST_VALIDATOR) as Address,
 		chainId: env.CHAIN_ID ? parseInt(env.CHAIN_ID, 10) : 10,
 	};
 }
@@ -207,6 +241,73 @@ export async function registerForFid(params: {
 
 	const fid = BigInt(logs[0]!.topics[2]!).toString();
 	return { fid, txHash };
+}
+
+/**
+ * Get the KeyGateway nonce for an address (used in addFor EIP-712).
+ */
+export async function getKeyGatewayNonce(
+	client: PublicClient,
+	address: Address,
+	config: ContractConfig,
+): Promise<bigint> {
+	return client.readContract({
+		address: config.keyGateway,
+		abi: keyGatewayAbi,
+		functionName: "nonces",
+		args: [address],
+	}) as Promise<bigint>;
+}
+
+/**
+ * Register a signer key via KeyGateway.addFor() using a Privy server wallet.
+ *
+ * The Privy wallet pays gas. The FID owner must have already signed the Add
+ * EIP-712 message authorizing the key addition.
+ */
+export async function addSignerForFid(params: {
+	client: PublicClient;
+	config: ContractConfig;
+	fidOwner: Address;
+	keyType: number;
+	key: `0x${string}`;
+	metadataType: number;
+	metadata: `0x${string}`;
+	deadline: bigint;
+	signature: `0x${string}`;
+	privyAppId: string;
+	privyAppSecret: string;
+	privyWalletId: string;
+}): Promise<{ txHash: string }> {
+	const { encodeFunctionData } = await import("viem");
+	const data = encodeFunctionData({
+		abi: keyGatewayAbi,
+		functionName: "addFor",
+		args: [
+			params.fidOwner,
+			params.keyType,
+			params.key,
+			params.metadataType,
+			params.metadata,
+			params.deadline,
+			params.signature,
+		],
+	});
+
+	const txHash = await submitPrivyTransaction({
+		appId: params.privyAppId,
+		appSecret: params.privyAppSecret,
+		walletId: params.privyWalletId,
+		chainId: params.config.chainId,
+		to: params.config.keyGateway,
+		data,
+		value: "0x0", // addFor is not payable
+	});
+
+	// Wait for receipt to confirm success
+	await params.client.waitForTransactionReceipt({ hash: txHash as `0x${string}` });
+
+	return { txHash };
 }
 
 /**
