@@ -226,7 +226,10 @@ export class ClientResolver {
 			redirectUris: doc.redirect_uris,
 			logoUri: doc.logo_uri,
 			clientUri: doc.client_uri,
-			tokenEndpointAuthMethod: (doc.token_endpoint_auth_method as "none" | "private_key_jwt") ?? "none",
+			tokenEndpointAuthMethod:
+				doc.token_endpoint_auth_method === "private_key_jwt"
+					? "private_key_jwt"
+					: "none",
 			jwks: doc.jwks as { keys: JWK[] } | undefined,
 			jwksUri: doc.jwks_uri,
 			cachedAt: Date.now(),
