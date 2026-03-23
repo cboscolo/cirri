@@ -1,8 +1,8 @@
 # Agent Profile Sync — AT Protocol + Farcaster Hub Client
 
-## Status: In Progress
+## Status: Complete
 
-**Branch:** `cboscolo/agent-profile-sync`
+**Branch:** `cboscolo/agent-profile-sync` (merged to main)
 
 ## Overview
 
