@@ -7,10 +7,12 @@
  * Storage format: 12-byte IV || ciphertext || 16-byte auth tag
  */
 
+import { ed25519 } from "@noble/curves/ed25519.js";
+
 const IV_LENGTH = 12;
 const TAG_LENGTH = 16;
 
-function hexToBytes(hex: string): Uint8Array {
+export function hexToBytes(hex: string): Uint8Array {
 	const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
 	const bytes = new Uint8Array(clean.length / 2);
 	for (let i = 0; i < bytes.length; i++) {
@@ -19,10 +21,23 @@ function hexToBytes(hex: string): Uint8Array {
 	return bytes;
 }
 
-function bytesToHex(bytes: Uint8Array): string {
+export function bytesToHex(bytes: Uint8Array): string {
 	return Array.from(bytes)
 		.map((b) => b.toString(16).padStart(2, "0"))
 		.join("");
+}
+
+/** Generate an ed25519 keypair. Returns hex strings. */
+export function generateEd25519Keypair(): {
+	privateKey: string;
+	publicKey: string;
+} {
+	const privateKeyBytes = ed25519.utils.randomSecretKey();
+	const publicKeyBytes = ed25519.getPublicKey(privateKeyBytes);
+	return {
+		privateKey: bytesToHex(privateKeyBytes),
+		publicKey: bytesToHex(publicKeyBytes),
+	};
 }
 
 async function importKey(hexKey: string): Promise<CryptoKey> {

@@ -137,7 +137,7 @@ To submit a message to the Hub, the sync service must:
 4. Wrap in a `Message` protobuf (data, hash, hashScheme, signature, signatureScheme, signer)
 5. Submit via `POST /v1/submitMessage` with the serialized protobuf
 
-This can use `@farcaster/core` for message construction and signing, or be implemented directly with protobuf + ed25519 libraries.
+Implemented with a hand-rolled protobuf encoder (`protobuf.ts`) + `@noble/hashes` (BLAKE3) + `@noble/curves` (ed25519). No `@farcaster/core` dependency — lighter footprint, no Node.js polyfills needed, works natively in Cloudflare workerd.
 
 ## Account Creation Integration
 
@@ -345,34 +345,44 @@ SYNC_SERVICE_KEY      -- API key for sync worker
 
 No new PDS environment variables required.
 
+## Resolved Decisions
+
+| # | Question | Decision |
+|---|----------|----------|
+| 1 | requestFid configuration | `REQUEST_FID` env var + `REQUEST_FID_PRIVATE_KEY` — implemented in signup service |
+| 4 | Signer key return to agent | No — service-generated, private key stays in sync service DO, never exposed |
+| 5 | Message construction library | Hand-rolled protobuf encoder (`protobuf.ts`) + `@noble/hashes` (BLAKE3) + `@noble/curves` (ed25519). No `@farcaster/core` — lighter, no Node.js deps, works in workerd |
+| 8 | POST /sync auth | Bearer JWT (user's access token) verified with JWT_SECRET |
+
 ## Open Decisions
 
-1. **requestFid configuration** — How to configure the miniapp's FID (env var vs other)
-2. **Sync enable UX for miniapp** — Where/how miniapp users turn on sync (future, not needed for Phase 1 agent flow)
-3. **Cross-user references** — How to handle likes/reposts that reference posts from non-fid.is users (skip vs external lookup)
-4. **Signer key return to agent** — Should the ed25519 private key be returned in the `POST /api/create` response so agents can also sign Hub messages directly?
-5. **Message construction library** — Use `@farcaster/core` for protobuf message building, or implement directly with lighter dependencies?
-6. **Rate limiting** — Hub submitMessage rate limits and how to handle them
-7. **Embed handling** — How to translate ATProto blob refs (images) to URLs the Hub can reference (use PDS blob URL?)
-8. **POST /sync auth** — Should agents authenticate with their PDS access JWT, a separate sync API key, or the internal API key?
+1. **Sync enable UX for miniapp** — Where/how miniapp users turn on sync (future, not needed for Phase 1 agent flow)
+2. **Cross-user references** — How to handle likes/reposts that reference posts from non-fid.is users (skip vs external lookup)
+3. **Rate limiting** — Hub submitMessage rate limits and how to handle them
+4. **Embed handling** — How to translate ATProto blob refs (images) to URLs the Hub can reference (use PDS blob URL?)
 
-## Implementation Order
+## Implementation Progress
 
-1. **KeyGateway + SignedKeyRequestValidator deployment** to OP Sepolia (`fid-contracts.md` Phase 2) — BLOCKER for testing
-2. **Signer registration in signup service** — Add `Add` EIP-712 typed data + `KeyGateway.addFor()` to agent creation flow
-3. **Sync worker scaffold** — `apps/sync/` with DO, encrypted key storage, setup endpoint, `POST /sync` endpoint
-4. **Hub write client** — Farcaster message construction, ed25519 signing, `POST /v1/submitMessage`
-5. **Cast sync** — ATProto `app.bsky.feed.post` → Farcaster cast (highest value, simplest)
-6. **Profile sync** — ATProto profile → Farcaster UserData
-7. **Delete sync** — Record deletions → Farcaster remove messages (using sync_mapping)
-8. **Like/repost/follow sync** — More complex due to cross-user ID mapping
-9. **Miniapp integration** — UI for enabling sync, signer registration via miniapp SDK (Phase 1.5)
-10. **Relay subscription** — Replace client-initiated sync with relay firehose listener (covers all clients)
-11. **Phase 2: Farcaster → ATProto** — Hub polling + PDS writes via service keys (signer-based dedup: skip messages signed by sync signer)
+| Step | Status | Notes |
+|------|--------|-------|
+| OP Sepolia contract deployment | ✅ Done | KeyGateway, SignedKeyRequestValidator deployed |
+| Signer registration in signup service | ✅ Done | `addSignerForFid()` via Privy, bundled into create flow |
+| Sync worker scaffold | ✅ Done | `apps/sync/` with DO, encrypted key storage, setup endpoint |
+| Hub write client | ✅ Done | protobuf.ts + farcaster-message.ts + hub-client.ts |
+| Profile sync | ✅ Done | UserDataAdd for display, bio, pfp |
+| Cast support | ✅ Done | CastAdd encoding + signing, tested on mainnet |
+| E2E testing | ✅ Done | `scripts/fc-test.ts` — full flow verified on mainnet Hub |
+| Cast sync in sync-do | ⬜ TODO | Wire up `app.bsky.feed.post` → CastAdd in `syncRecord()` |
+| Delete sync | ⬜ TODO | Record deletions → remove messages (using sync_mapping) |
+| Like/repost/follow sync | ⬜ TODO | Complex due to cross-user ID mapping |
+| Miniapp integration | ⬜ TODO | UI for enabling sync, signer registration |
+| Relay subscription | ⬜ TODO | Replace client-initiated sync with firehose listener |
+| Phase 2: Farcaster → ATProto | ⬜ TODO | Hub polling + PDS writes via service keys |
 
 ## Related Plans
 
-- `plans/todo/service-keys.md` — Service key auth (needed for Phase 2, not Phase 1)
-- `plans/todo/agent-farcaster-signer.md` — Agent signer registration (subsumed by this plan's signup integration)
+- `plans/in-progress/agent-profile-sync.md` — Current work on profile + cast sync (protocol details, bug fixes)
+- `plans/complete/agent-farcaster-signer.md` — Signer registration flow (complete)
+- `plans/reference/fc-test-cli.md` — CLI test tool documentation
 - `plans/reference/farcaster-onchain-signers.md` — On-chain signer reference
-- `fid-contracts.md` — OP Sepolia contract deployment (Phase 2 needed for testing)
+- `plans/todo/service-keys.md` — Service key auth (needed for Phase 2, not Phase 1)
