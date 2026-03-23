@@ -11,8 +11,11 @@
  */
 
 import { DurableObject } from "cloudflare:workers";
-import { encryptSignerKey, decryptSignerKey } from "./crypto";
-import type { Env, SyncConfig, SyncRequest, SetupRequest } from "./types";
+import { encryptSignerKey, decryptSignerKey, bytesToHex } from "./crypto";
+import { buildUserDataMessage } from "./farcaster-message";
+import { submitMessage } from "./hub-client";
+import type { Env, SyncConfig, SyncRequest, SetupRequest, UserDataType } from "./types";
+import { USER_DATA_TYPE_PFP, USER_DATA_TYPE_DISPLAY, USER_DATA_TYPE_BIO } from "./types";
 
 export class SyncDurableObject extends DurableObject<Env> {
 	private initialized = false;
@@ -222,8 +225,6 @@ export class SyncDurableObject extends DurableObject<Env> {
 	/**
 	 * Handle a sync request — transform an ATProto record into a Farcaster message
 	 * and submit it to the Hub.
-	 *
-	 * This is the core sync logic. Currently a stub — will be implemented in step 4/5.
 	 */
 	async syncRecord(request: SyncRequest): Promise<{ ok: true; farcasterHash?: string }> {
 		this.ensureSchema();
@@ -237,22 +238,127 @@ export class SyncDurableObject extends DurableObject<Env> {
 		}
 
 		if (request.action === "create") {
-			// TODO (step 4-5): Transform ATProto record → Farcaster message, sign, submit to Hub
-			// For now, log and return success
-			console.log(`[sync] Would sync ${request.collection}/${request.rkey} for FID ${request.fid}`);
+			if (request.collection === "app.bsky.actor.profile") {
+				return this.syncProfile(request, config);
+			}
+			console.log(`[sync] Unsupported collection for create: ${request.collection}`);
 			return { ok: true };
 		} else if (request.action === "delete") {
+			if (request.collection === "app.bsky.actor.profile") {
+				return this.deleteProfile(config);
+			}
 			const farcasterHash = this.getMapping(request.collection, request.rkey);
 			if (!farcasterHash) {
-				// No mapping — nothing to delete on Farcaster side
 				return { ok: true };
 			}
-			// TODO (step 7): Build remove message, sign, submit to Hub
+			// TODO: Build remove message for other collections
 			console.log(`[sync] Would delete Farcaster message ${farcasterHash} for ${request.collection}/${request.rkey}`);
 			this.deleteMapping(request.collection, request.rkey);
 			return { ok: true, farcasterHash };
 		}
 
 		throw new Error(`Unknown action: ${request.action}`);
+	}
+
+	/**
+	 * Sync an app.bsky.actor.profile record to Farcaster UserData messages.
+	 *
+	 * Extracts displayName, description, and avatar from the ATProto record
+	 * and submits UserDataAdd messages for each.
+	 */
+	private async syncProfile(
+		request: SyncRequest,
+		config: SyncConfig,
+	): Promise<{ ok: true; farcasterHash?: string }> {
+		const record = request.record;
+		if (!record) {
+			throw new Error("Profile sync requires a record");
+		}
+
+		const signerKey = await this.getSignerKey();
+		if (!signerKey) {
+			throw new Error("No signer key available");
+		}
+
+		const fields: Array<{ type: UserDataType; value: string }> = [];
+
+		if (typeof record.displayName === "string") {
+			fields.push({ type: USER_DATA_TYPE_DISPLAY, value: record.displayName });
+		}
+
+		if (typeof record.description === "string") {
+			fields.push({ type: USER_DATA_TYPE_BIO, value: record.description });
+		}
+
+		// Avatar: ATProto stores blob refs, construct PDS blob URL
+		const avatar = record.avatar as Record<string, unknown> | undefined;
+		if (avatar?.ref && typeof avatar.ref === "object") {
+			const ref = avatar.ref as Record<string, unknown>;
+			const cid = ref.$link as string | undefined;
+			if (cid) {
+				const blobUrl = `${config.pdsUrl}/xrpc/com.atproto.sync.getBlob?did=${config.did}&cid=${cid}`;
+				fields.push({ type: USER_DATA_TYPE_PFP, value: blobUrl });
+			}
+		}
+
+		let lastHash: string | undefined;
+
+		for (const field of fields) {
+			const { messageBytes, hash } = buildUserDataMessage(
+				config.fid,
+				field.type,
+				field.value,
+				signerKey,
+			);
+
+			const result = await submitMessage(this.env.HUB_API_URL, messageBytes, hash);
+			if (!result.ok) {
+				console.error(`[sync] Hub rejected UserData type=${field.type}: ${result.errCode} ${result.message}`);
+				continue;
+			}
+
+			lastHash = result.hash;
+			console.log(`[sync] Submitted UserData type=${field.type} hash=${result.hash} for FID ${config.fid}`);
+		}
+
+		// Store mapping for the profile record
+		if (lastHash) {
+			this.saveMapping(request.collection, request.rkey, lastHash);
+		}
+
+		return { ok: true, farcasterHash: lastHash };
+	}
+
+	/**
+	 * Handle profile deletion by sending empty UserData values.
+	 * UserData is last-write-wins, so empty strings effectively clear the fields.
+	 */
+	private async deleteProfile(config: SyncConfig): Promise<{ ok: true; farcasterHash?: string }> {
+		const signerKey = await this.getSignerKey();
+		if (!signerKey) {
+			throw new Error("No signer key available");
+		}
+
+		const types: UserDataType[] = [USER_DATA_TYPE_DISPLAY, USER_DATA_TYPE_BIO, USER_DATA_TYPE_PFP];
+		let lastHash: string | undefined;
+
+		for (const type of types) {
+			const { messageBytes, hash } = buildUserDataMessage(
+				config.fid,
+				type,
+				"", // empty string clears the field
+				signerKey,
+			);
+
+			const result = await submitMessage(this.env.HUB_API_URL, messageBytes, hash);
+			if (!result.ok) {
+				console.error(`[sync] Hub rejected UserData clear type=${type}: ${result.errCode} ${result.message}`);
+				continue;
+			}
+			lastHash = result.hash;
+		}
+
+		this.deleteMapping("app.bsky.actor.profile", "self");
+		return { ok: true, farcasterHash: lastHash };
 	}
 }

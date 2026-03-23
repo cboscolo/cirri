@@ -33,3 +33,6 @@ signing-key-backup-*.txt
 
 # Test wallet keys (contains private keys)
 .test-wallets.json
+
+# Farcaster CLI test state (contains private keys)
+.fc-test-state.json

@@ -41,6 +41,30 @@ export interface SyncMapping {
 	createdAt: string;
 }
 
+/** Farcaster protocol constants */
+export const FARCASTER_EPOCH = 1609459200; // 2021-01-01T00:00:00Z
+
+export const MESSAGE_TYPE_CAST_ADD = 1;
+export const MESSAGE_TYPE_USER_DATA_ADD = 11;
+
+export const HASH_SCHEME_BLAKE3 = 1;
+export const SIGNATURE_SCHEME_ED25519 = 1;
+export const FARCASTER_NETWORK_MAINNET = 1;
+
+/** Farcaster UserData field types */
+export const USER_DATA_TYPE_PFP = 1 as const;
+export const USER_DATA_TYPE_DISPLAY = 2 as const;
+export const USER_DATA_TYPE_BIO = 3 as const;
+export const USER_DATA_TYPE_URL = 5 as const;
+export const USER_DATA_TYPE_USERNAME = 6 as const;
+
+export type UserDataType =
+	| typeof USER_DATA_TYPE_PFP
+	| typeof USER_DATA_TYPE_DISPLAY
+	| typeof USER_DATA_TYPE_BIO
+	| typeof USER_DATA_TYPE_URL
+	| typeof USER_DATA_TYPE_USERNAME;
+
 import type { SyncDurableObject } from "./sync-do";
 
 export interface Env {
